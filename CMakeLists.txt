@@ -84,18 +84,43 @@ set(CITYGML_CONSTRUCTION_SOURCES
 )
 
 # ============================================================
+# CityGML Parser 模块
+# ============================================================
+set(CITYGML_PARSER_HEADERS
+    include/citygml/citygml_parser.h
+    include/citygml/parser/parser_context.h
+    include/citygml/parser/xml_document.h
+    include/citygml/parser/gml_envelope_parser.h
+    include/citygml/parser/gml_geometry_parser.h
+    include/citygml/parser/citygml_reader.h
+    include/citygml/parser/xml_utils.h
+)
+
+set(CITYGML_PARSER_SOURCES
+    src/parser/citygml_parser.cpp
+    src/parser/parser_context.cpp
+    src/parser/xml_document.cpp
+    src/parser/gml_envelope_parser.cpp
+    src/parser/gml_geometry_parser.cpp
+    src/parser/citygml_reader.cpp
+    src/parser/xml_utils.cpp
+)
+
+# ============================================================
 # 合并所有源文件
 # ============================================================
 set(ALL_HEADERS
     ${CITYGML_CORE_HEADERS}
     ${CITYGML_BUILDING_HEADERS}
     ${CITYGML_CONSTRUCTION_HEADERS}
+    ${CITYGML_PARSER_HEADERS}
 )
 
 set(ALL_SOURCES
     ${CITYGML_CORE_SOURCES}
     ${CITYGML_BUILDING_SOURCES}
     ${CITYGML_CONSTRUCTION_SOURCES}
+    ${CITYGML_PARSER_SOURCES}
 )
 
 add_library(citygml_obj_lib STATIC ${ALL_HEADERS} ${ALL_SOURCES})

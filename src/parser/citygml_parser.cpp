@@ -1,0 +1,97 @@
+#include "citygml/citygml_parser.h"
+#include "citygml/parser/xml_document.h"
+#include "citygml/parser/gml_geometry_parser.h"
+#include "citygml/parser/citygml_reader.h"
+#include "citygml/parser/gml_envelope_parser.h"
+
+namespace citygml {
+
+CityGMLParser::CityGMLParser()
+    : context_(std::make_shared<ParserContext>())
+    , geometryParser_(std::make_shared<GMLGeometryParser>(context_))
+    , cityGMLReader_(std::make_shared<CityGMLReader>(context_, geometryParser_))
+{
+}
+
+CityGMLParser::~CityGMLParser() = default;
+
+ParseResult CityGMLParser::parse(const std::string& filePath, std::shared_ptr<CityModel>& cityModel, const ParseOptions& options) {
+    if (filePath.empty()) {
+        return ParseResult::error("Empty file path");
+    }
+    
+    XMLDocument doc;
+    if (!doc.loadFile(filePath.c_str())) {
+        return ParseResult::error(std::string("XML parse failed: ") + doc.errorStr());
+    }
+    
+    void* root = doc.root();
+    if (!root) {
+        return ParseResult::error("No root node");
+    }
+    
+    auto result = initializeParser(filePath);
+    if (!result.success) {
+        return result;
+    }
+    
+    return parseCityModelNode(root, cityModel);
+}
+
+ParseResult CityGMLParser::parseString(const std::string& xmlContent, std::shared_ptr<CityModel>& cityModel, const ParseOptions& options) {
+    if (xmlContent.empty()) {
+        return ParseResult::error("Empty XML content");
+    }
+    
+    XMLDocument doc;
+    if (!doc.parse(xmlContent.c_str())) {
+        return ParseResult::error(std::string("XML parse failed: ") + doc.errorStr());
+    }
+    
+    void* root = doc.root();
+    if (!root) {
+        return ParseResult::error("No root node");
+    }
+    
+    context_ = std::make_shared<ParserContext>();
+    geometryParser_ = std::make_shared<GMLGeometryParser>(context_);
+    cityGMLReader_ = std::make_shared<CityGMLReader>(context_, geometryParser_);
+    
+    return parseCityModelNode(root, cityModel);
+}
+
+ParseResult CityGMLParser::initializeParser(const std::string& filePath) {
+    context_ = std::make_shared<ParserContext>();
+    geometryParser_ = std::make_shared<GMLGeometryParser>(context_);
+    cityGMLReader_ = std::make_shared<CityGMLReader>(context_, geometryParser_);
+    
+    return ParseResult::successResult();
+}
+
+ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityModel>& cityModel) {
+    cityModel = std::make_shared<CityModel>();
+    
+    void* boundedBy = XMLDocument::child(node, "boundedBy");
+    if (!boundedBy) {
+        boundedBy = XMLDocument::child(node, "gml:boundedBy");
+    }
+    if (boundedBy) {
+        GMLEnvelopeParser envelopeParser;
+        auto envelope = envelopeParser.parse(boundedBy, context_);
+        if (envelope) {
+            cityModel->setEnvelope(*envelope);
+        }
+    }
+    
+    std::vector<void*> members = XMLDocument::children(node, "cityObjectMember");
+    for (void* member : members) {
+        auto cityObject = cityGMLReader_->readCityObject(member);
+        if (cityObject) {
+            cityModel->addCityObject(cityObject);
+        }
+    }
+    
+    return ParseResult::successResult();
+}
+
+} // namespace citygml

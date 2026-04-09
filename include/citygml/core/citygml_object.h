@@ -2,21 +2,17 @@
 
 #include "citygml/core/citygml_feature.h"
 #include "citygml/core/citygml_appearance.h"
+#include "citygml/core/citygml_geometry.h"
 
 namespace citygml {
 
-// ============================================================
-// 前向声明
-// ============================================================
-
 class AbstractAppearance;
-
-// ============================================================
-// AbstractCityObject - 所有城市对象的抽象基类
-// ============================================================
 
 class AbstractCityObject : public CityGMLFeature {
 public:
+    AbstractCityObject() = default;
+    explicit AbstractCityObject(const std::string& type) : type_(type) {}
+    
     virtual ~AbstractCityObject() = default;
     
     const std::optional<RelativeToTerrain>& getRelativeToTerrain() const { return relativeToTerrain_; }
@@ -25,20 +21,35 @@ public:
     const std::optional<RelativeToWater>& getRelativeToWater() const { return relativeToWater_; }
     void setRelativeToWater(RelativeToWater value) { relativeToWater_ = value; }
     
+    const std::optional<Envelope>& getEnvelope() const { return envelope_; }
+    void setEnvelope(const Envelope& env) { envelope_ = env; }
+    
     const std::vector<std::shared_ptr<AbstractCityObject>>& getGeneralizesTo() const { return generalizesTo_; }
     void addGeneralization(std::shared_ptr<AbstractCityObject> obj) { generalizesTo_.push_back(obj); }
     
+    std::shared_ptr<AbstractGeometry> getLODGeometry(int lod) const {
+        auto it = lodGeometries_.find(lod);
+        if (it != lodGeometries_.end()) {
+            return it->second;
+        }
+        return nullptr;
+    }
+    
+    void setLODGeometry(int lod, std::shared_ptr<AbstractGeometry> geom) {
+        lodGeometries_[lod] = geom;
+    }
+    
 private:
+    std::string type_;
     std::optional<RelativeToTerrain> relativeToTerrain_;
     std::optional<RelativeToWater> relativeToWater_;
+    std::optional<Envelope> envelope_;
     std::vector<std::shared_ptr<AbstractCityObject>> generalizesTo_;
+    std::map<int, std::shared_ptr<AbstractGeometry>> lodGeometries_;
 };
 
 using CityObjectPtr = std::shared_ptr<AbstractCityObject>;
-
-// ============================================================
-// CityModel - 城市模型（根容器）
-// ============================================================
+using CityObject = AbstractCityObject;
 
 class CityModel : public CityGMLFeatureWithLifespan {
 public:
