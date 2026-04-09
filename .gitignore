@@ -1,0 +1,27 @@
+# 构建输出
+build/
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+
+# 第三方依赖
+tinyxml2-master/
+tinyxml2-master.zip
+tinyxml2-build/
+earcut.hpp-master/
+earcut.hpp-master.zip
+_deps/
+
+# 测试输出
+test_output.obj
+test_output.mtl
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# 其他
+*.log
