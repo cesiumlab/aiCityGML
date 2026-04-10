@@ -6,6 +6,7 @@
 #include <functional>
 #include <iostream>
 #include <list>
+#include <set>
 #include <vector>
 #include <cstdint>
 
@@ -437,6 +438,41 @@ void MeshGenerator::triangulateCityObject(const CityObject& obj,
             outMeshes.push_back(std::move(m));
         }
     }
+
+    // Implicit representations (LOD 1-3).
+    std::vector<std::shared_ptr<AbstractGeometry>> implCandidates;
+    if (lod == -1 || lod == 1) implCandidates.push_back(obj.getLod1ImplicitRepresentation());
+    if (lod == -1 || lod == 2) implCandidates.push_back(obj.getLod2ImplicitRepresentation());
+    if (lod == -1 || lod == 3) implCandidates.push_back(obj.getLod3ImplicitRepresentation());
+
+    for (auto& g : implCandidates) {
+        if (!g) continue;
+        if (auto impl = std::dynamic_pointer_cast<ImplicitGeometry>(g)) {
+            Mesh m;
+            triangulateImplicitGeometry(*impl, m);
+            if (!m.isEmpty()) {
+                m.name = impl->getId().empty() ? "ImplicitGeometry" : impl->getId();
+                outMeshes.push_back(std::move(m));
+            }
+        } else {
+            // Non-implicit geometry stored in implicit slot — triangulate normally.
+            if (auto ms = std::dynamic_pointer_cast<MultiSurface>(g)) {
+                Mesh m;
+                triangulateMultiSurface(*ms, m);
+                if (!m.isEmpty()) {
+                    m.name = obj.getId().empty() ? obj.getObjectType() : obj.getId();
+                    outMeshes.push_back(std::move(m));
+                }
+            } else if (auto solid = std::dynamic_pointer_cast<Solid>(g)) {
+                Mesh m;
+                triangulateSolid(*solid, m);
+                if (!m.isEmpty()) {
+                    m.name = obj.getId().empty() ? obj.getObjectType() : obj.getId();
+                    outMeshes.push_back(std::move(m));
+                }
+            }
+        }
+    }
 }
 
 // ================================================================
@@ -467,15 +503,238 @@ void MeshGenerator::triangulateRoofEdge(const CityObject& obj,
 // ================================================================
 void MeshGenerator::triangulateWallSurface(const WallSurface& wall,
                                             std::vector<Mesh>& outMeshes) {
-    (void)wall;
     outMeshes.clear();
+    MultiSurfacePtr ms = wall.getMultiSurface();
+    if (!ms) return;
+
+    for (size_t i = 0; i < ms->getGeometriesCount(); ++i) {
+        PolygonPtr poly = ms->getGeometry(i);
+        if (!poly) continue;
+
+        LinearRingPtr exterior = poly->getExteriorRing();
+        if (!exterior || exterior->getPointsCount() < 3) continue;
+
+        Material mat;
+        const std::vector<Vec2>* uvPtr = nullptr;
+        std::vector<Vec2> uvCoords;
+
+        if (auto t = poly->getTexture()) {
+            mat = fromParameterizedTexture(*t);
+            std::vector<TextureCoordinates2D> tc = collectTextureCoords(*poly, *t);
+            if (!tc.empty() && !tc[0].coordinates.empty()) {
+                uvCoords = tc[0].coordinates;
+                if (uvCoords.size() >= static_cast<size_t>(exterior->getPointsCount())) {
+                    uvCoords.resize(exterior->getPointsCount());
+                    uvPtr = &uvCoords;
+                }
+            }
+        } else if (auto m = poly->getMaterial()) {
+            mat = fromX3DMaterial(*m);
+        }
+
+        std::vector<LinearRingPtr> holes;
+        for (const auto& opening : wall.getOpenings()) {
+            std::vector<LinearRingPtr> rings = extractOpeningRings(*opening);
+            for (auto& r : rings) {
+                if (r && r->getPointsCount() >= 3) holes.push_back(r);
+            }
+        }
+
+        std::vector<Vertex> verts;
+        std::vector<Triangle> tris;
+        if (holes.empty()) {
+            triangulateRing(ringToVec3(*exterior), uvPtr, verts, tris);
+        } else {
+            triangulatePolygonWithHoles(*poly, holes, verts, tris, mat);
+        }
+
+        if (verts.empty() || tris.empty()) continue;
+
+        Mesh mesh;
+        mesh.name = poly->getId().empty() ? "WallSurface" : poly->getId();
+        SubMesh& sm = mesh.addSubMesh(mat);
+        sm.vertices = std::move(verts);
+        sm.triangles = std::move(tris);
+        outMeshes.push_back(std::move(mesh));
+    }
 }
 
-void MeshGenerator::triangulatePolygonWithHoles(const Polygon&,
-                                               const std::vector<LinearRingPtr>&,
-                                               std::vector<Vertex>&,
-                                               std::vector<Triangle>&,
-                                               Material&) {}
+// Point-in-polygon test using ray casting.
+// Returns true if point (px,py) is strictly inside the polygon.
+// polygon2d: flat array of (x,y) vertex pairs in winding order.
+static bool pointInPolygon2D(const std::vector<Vec2>& poly2d, double px, double py) {
+    size_t n = poly2d.size();
+    if (n < 3) return false;
+    bool inside = false;
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        double xi = poly2d[i].u, yi = poly2d[i].v;
+        double xj = poly2d[j].u, yj = poly2d[j].v;
+        bool intersect = ((yi > py) != (yj > py)) &&
+            (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
+}
+
+// Line segment intersection test (strict: does not count touching).
+static bool segmentsIntersect2D(double ax, double ay, double bx, double by,
+                               double cx, double cy, double dx, double dy) {
+    auto orientation = [](double sx, double sy, double ex, double ey, double px, double py) {
+        return (ex - sx) * (py - sy) - (ey - sy) * (px - sx);
+    };
+    double o1 = orientation(ax, ay, bx, by, cx, cy);
+    double o2 = orientation(ax, ay, bx, by, dx, dy);
+    double o3 = orientation(cx, cy, dx, dy, ax, ay);
+    double o4 = orientation(cx, cy, dx, dy, bx, by);
+    if ((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) {
+        if ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0)) return true;
+    }
+    return false;
+}
+
+static bool edgeIntersectsHoleEdges(const Vec2& p, const Vec2& q,
+                                     const std::vector<std::vector<Vec2>>& holePoly2d) {
+    for (const auto& hp : holePoly2d) {
+        size_t nh = hp.size();
+        for (size_t j = 0; j < nh; ++j) {
+            if (segmentsIntersect2D(p.u, p.v, q.u, q.v,
+                                    hp[j].u, hp[j].v,
+                                    hp[(j+1)%nh].u, hp[(j+1)%nh].v))
+                return true;
+        }
+    }
+    return false;
+}
+
+void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
+                                                 const std::vector<LinearRingPtr>& holes,
+                                                 std::vector<Vertex>& outVertices,
+                                                 std::vector<Triangle>& outTriangles,
+                                                 Material& outMaterial) {
+    outVertices.clear();
+    outTriangles.clear();
+
+    LinearRingPtr exterior = surface.getExteriorRing();
+    if (!exterior || exterior->getPointsCount() < 3) return;
+
+    std::vector<Vec3> pts3d = ringToVec3(*exterior);
+    const std::vector<Vec2>* exteriorUvPtr = nullptr;
+    std::vector<Vec2> exteriorUv;
+
+    if (auto tex = surface.getTexture()) {
+        std::vector<TextureCoordinates2D> tc = collectTextureCoords(surface, *tex);
+        if (!tc.empty() && !tc[0].coordinates.empty()) {
+            exteriorUv = tc[0].coordinates;
+            if (exteriorUv.size() >= pts3d.size()) {
+                exteriorUv.resize(pts3d.size());
+                exteriorUvPtr = &exteriorUv;
+            }
+        }
+        outMaterial = fromParameterizedTexture(*tex);
+    } else if (auto mat = surface.getMaterial()) {
+        outMaterial = fromX3DMaterial(*mat);
+    }
+
+    // Project exterior ring to 2D using local frame.
+    Vec3 origin, x_axis, y_axis, z_axis;
+    std::vector<Vec3> clean3d;
+    std::vector<Vec2> clean2d;
+    buildLocalFrame(pts3d, exteriorUvPtr, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
+    if (clean3d.size() < 3) return;
+    z_axis = {-z_axis.x, -z_axis.y, -z_axis.z};
+
+    // Project each hole ring to 2D using the same local frame.
+    std::vector<std::vector<Vec2>> holePoly2d;
+    for (const auto& hole : holes) {
+        if (!hole || hole->getPointsCount() < 3) continue;
+        std::vector<Vec3> hole3d = ringToVec3(*hole);
+        std::vector<Vec3> h3dClean;
+        std::vector<Vec2> h2dClean;
+        buildLocalFrame(hole3d, nullptr, origin, x_axis, y_axis, z_axis, h3dClean, h2dClean);
+        if (h2dClean.size() >= 3) {
+            holePoly2d.push_back(h2dClean);
+        }
+    }
+
+    // Ear-clipping with hole constraints.
+    double totalArea = 0;
+    for (size_t i = 0; i < clean2d.size(); ++i) {
+        const Vec2& a = clean2d[i];
+        const Vec2& b = clean2d[(i + 1) % clean2d.size()];
+        totalArea += a.u * b.v - b.u * a.v;
+    }
+    bool exteriorCCW = (totalArea > 0);
+
+    std::list<size_t> remaining;
+    for (size_t i = 0; i < clean2d.size(); ++i) remaining.push_back(i);
+
+    while (remaining.size() > 3) {
+        bool earFound = false;
+        for (auto it = remaining.begin(); it != remaining.end(); ++it) {
+            auto prevIt = (it == remaining.begin()) ? std::prev(remaining.end()) : std::prev(it);
+            auto nextIt = std::next(it);
+            if (nextIt == remaining.end()) nextIt = remaining.begin();
+
+            size_t vi = *it, vp = *prevIt, vn = *nextIt;
+            double area = triangleArea2D(
+                clean2d[vp].u, clean2d[vp].v,
+                clean2d[vi].u, clean2d[vi].v,
+                clean2d[vn].u, clean2d[vn].v);
+
+            bool isConvex = exteriorCCW ? (area > 0) : (area < 0);
+            if (!isConvex) continue;
+
+            // Check no other vertex lies inside the ear.
+            bool anyInside = false;
+            for (size_t vk : remaining) {
+                if (vk == vp || vk == vi || vk == vn) continue;
+                if (pointInTriangle2D(
+                        clean2d[vp].u, clean2d[vp].v,
+                        clean2d[vi].u, clean2d[vi].v,
+                        clean2d[vn].u, clean2d[vn].v,
+                        clean2d[vk].u, clean2d[vk].v)) {
+                    anyInside = true;
+                    break;
+                }
+            }
+            if (anyInside) continue;
+
+            // Check ear does not cross any hole edge.
+            if (edgeIntersectsHoleEdges(clean2d[vp], clean2d[vn], holePoly2d)) continue;
+
+            // Check midpoint of the ear edge is not inside any hole.
+            double mx = (clean2d[vp].u + clean2d[vn].u) * 0.5;
+            double my = (clean2d[vp].v + clean2d[vn].v) * 0.5;
+            bool inHole = false;
+            for (const auto& hp : holePoly2d) {
+                if (pointInPolygon2D(hp, mx, my)) { inHole = true; break; }
+            }
+            if (inHole) continue;
+
+            uint32_t baseIdx = static_cast<uint32_t>(outVertices.size());
+            outVertices.emplace_back(clean3d[vp], z_axis, clean2d[vp]);
+            outVertices.emplace_back(clean3d[vi], z_axis, clean2d[vi]);
+            outVertices.emplace_back(clean3d[vn], z_axis, clean2d[vn]);
+            outTriangles.emplace_back(baseIdx, baseIdx + 1, baseIdx + 2);
+
+            auto eraseIt = it;
+            if (it == remaining.begin()) it = std::prev(remaining.end());
+            else --it;
+            remaining.erase(eraseIt);
+            earFound = true;
+            break;
+        }
+        if (!earFound) break;
+    }
+
+    if (remaining.size() == 3) {
+        uint32_t baseIdx = static_cast<uint32_t>(outVertices.size());
+        for (size_t idx : remaining) {
+            outVertices.emplace_back(clean3d[idx], z_axis, clean2d[idx]);
+        }
+        outTriangles.emplace_back(baseIdx, baseIdx + 1, baseIdx + 2);
+    }
+}
 
 // ================================================================
 // Thematic surface helpers
@@ -586,15 +845,92 @@ Vec3 MeshGenerator::computeFaceNormal(const Vertex& v0,
     return ab.cross(ac).normalized();
 }
 
-void MeshGenerator::computeVertexNormals(std::vector<Vertex>&,
-                                         const std::vector<Triangle>&) {}
+void MeshGenerator::computeVertexNormals(std::vector<Vertex>& vertices,
+                                         const std::vector<Triangle>& triangles) {
+    for (auto& v : vertices) {
+        v.normal = {0.0, 0.0, 0.0};
+    }
+    for (const auto& tri : triangles) {
+        if (tri.v0 >= vertices.size() ||
+            tri.v1 >= vertices.size() ||
+            tri.v2 >= vertices.size()) continue;
+        const Vec3& a = vertices[tri.v0].position;
+        const Vec3& b = vertices[tri.v1].position;
+        const Vec3& c = vertices[tri.v2].position;
+        Vec3 ab = b - a;
+        Vec3 ac = c - a;
+        Vec3 fn = ab.cross(ac);  // outward normal for CCW winding
+        vertices[tri.v0].normal = vertices[tri.v0].normal + fn;
+        vertices[tri.v1].normal = vertices[tri.v1].normal + fn;
+        vertices[tri.v2].normal = vertices[tri.v2].normal + fn;
+    }
+    for (auto& v : vertices) {
+        double len = std::sqrt(v.normal.x*v.normal.x + v.normal.y*v.normal.y + v.normal.z*v.normal.z);
+        if (len > 1e-10) {
+            v.normal = {v.normal.x/len, v.normal.y/len, v.normal.z/len};
+        } else {
+            v.normal = {0.0, 1.0, 0.0};
+        }
+    }
+}
 
-void MeshGenerator::extrudeFootPrint(const std::vector<Vertex>&,
-                                     const std::vector<Triangle>&,
-                                     const Vec3&,
-                                     double,
-                                     Mesh&,
-                                     const Material&) {}
+void MeshGenerator::extrudeFootPrint(const std::vector<Vertex>& footprintVertices,
+                                     const std::vector<Triangle>& footprintTriangles,
+                                     const Vec3& extrusionDir,
+                                     double height,
+                                     Mesh& outMesh,
+                                     const Material& defaultMat) {
+    outMesh.clear();
+    if (footprintVertices.empty() || footprintTriangles.empty()) return;
+
+    double dirLen = std::sqrt(extrusionDir.x*extrusionDir.x +
+                              extrusionDir.y*extrusionDir.y +
+                              extrusionDir.z*extrusionDir.z);
+    if (dirLen < 1e-10) return;
+    Vec3 dir = {extrusionDir.x/dirLen, extrusionDir.y/dirLen, extrusionDir.z/dirLen};
+    Vec3 offset = {dir.x*height, dir.y*height, dir.z*height};
+
+    SubMesh& sm = outMesh.addSubMesh(defaultMat);
+
+    // Build all vertices: bottom (original) then top (offset).
+    size_t n = footprintVertices.size();
+    std::vector<uint32_t> bottomIdx(n), topIdx(n);
+    for (size_t i = 0; i < n; ++i) {
+        bottomIdx[i] = static_cast<uint32_t>(sm.vertices.size());
+        sm.vertices.push_back(footprintVertices[i]);
+
+        topIdx[i] = static_cast<uint32_t>(sm.vertices.size());
+        Vertex top = footprintVertices[i];
+        top.position = top.position + offset;
+        sm.vertices.push_back(top);
+    }
+
+    // Top and bottom faces.
+    for (const auto& tri : footprintTriangles) {
+        sm.triangles.emplace_back(bottomIdx[tri.v0], bottomIdx[tri.v2], bottomIdx[tri.v1]); // bottom (flipped winding)
+        sm.triangles.emplace_back(topIdx[tri.v0], topIdx[tri.v1], topIdx[tri.v2]);           // top (keep winding)
+    }
+
+    // Side faces: collect boundary edges (appear once in the triangle list).
+    std::set<std::pair<uint32_t, uint32_t>> seen;
+    for (const auto& tri : footprintTriangles) {
+        for (auto e : {std::pair{tri.v0, tri.v1},
+                        std::pair{tri.v1, tri.v2},
+                        std::pair{tri.v2, tri.v0}}) {
+            if (seen.erase(e) > 0) {
+                // Already present → interior edge → skip
+            } else {
+                seen.insert(e);
+            }
+        }
+    }
+    for (const auto& e : seen) {
+        uint32_t a = e.first;
+        uint32_t b = e.second;
+        sm.triangles.emplace_back(bottomIdx[a], bottomIdx[b], topIdx[b]);
+        sm.triangles.emplace_back(bottomIdx[a], topIdx[b], topIdx[a]);
+    }
+}
 
 Material MeshGenerator::fromX3DMaterial(const X3DMaterial& mat) {
     Material m;
@@ -670,24 +1006,165 @@ MeshGenerator::collectTextureCoords(const Polygon& polygon,
 // ================================================================
 // Helper free functions
 // ================================================================
-void triangulateRings(const LinearRing&,
-                      const std::vector<LinearRingPtr>&,
-                      std::vector<Vertex>&,
-                      std::vector<Triangle>&) {}
+void triangulateRings(const LinearRing& exterior,
+                      const std::vector<LinearRingPtr>& interiorRings,
+                      std::vector<Vertex>& outVertices,
+                      std::vector<Triangle>& outTriangles) {
+    if (exterior.getPointsCount() < 3) return;
+
+    std::vector<LinearRingPtr> holes;
+    for (const auto& r : interiorRings) {
+        if (r && r->getPointsCount() >= 3) holes.push_back(r);
+    }
+
+    std::vector<Vec3> pts3d = ringToVec3(exterior);
+    Vec3 origin, x_axis, y_axis, z_axis;
+    std::vector<Vec3> clean3d;
+    std::vector<Vec2> clean2d;
+    buildLocalFrame(pts3d, nullptr, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
+    if (clean3d.size() < 3) return;
+    z_axis = {-z_axis.x, -z_axis.y, -z_axis.z};
+
+    std::vector<std::vector<Vec2>> holePoly2d;
+    for (const auto& hole : holes) {
+        std::vector<Vec3> h3d = ringToVec3(*hole);
+        std::vector<Vec3> hc3d;
+        std::vector<Vec2> hc2d;
+        buildLocalFrame(h3d, nullptr, origin, x_axis, y_axis, z_axis, hc3d, hc2d);
+        if (hc2d.size() >= 3) holePoly2d.push_back(hc2d);
+    }
+
+    double totalArea = 0;
+    for (size_t i = 0; i < clean2d.size(); ++i) {
+        const Vec2& a = clean2d[i];
+        const Vec2& b = clean2d[(i + 1) % clean2d.size()];
+        totalArea += a.u * b.v - b.u * a.v;
+    }
+    bool exteriorCCW = (totalArea > 0);
+
+    std::list<size_t> remaining;
+    for (size_t i = 0; i < clean2d.size(); ++i) remaining.push_back(i);
+
+    while (remaining.size() > 3) {
+        bool earFound = false;
+        for (auto it = remaining.begin(); it != remaining.end(); ++it) {
+            auto prevIt = (it == remaining.begin()) ? std::prev(remaining.end()) : std::prev(it);
+            auto nextIt = std::next(it);
+            if (nextIt == remaining.end()) nextIt = remaining.begin();
+
+            size_t vi = *it, vp = *prevIt, vn = *nextIt;
+            double area = triangleArea2D(
+                clean2d[vp].u, clean2d[vp].v,
+                clean2d[vi].u, clean2d[vi].v,
+                clean2d[vn].u, clean2d[vn].v);
+
+            bool isConvex = exteriorCCW ? (area > 0) : (area < 0);
+            if (!isConvex) continue;
+
+            bool anyInside = false;
+            for (size_t vk : remaining) {
+                if (vk == vp || vk == vi || vk == vn) continue;
+                if (pointInTriangle2D(
+                        clean2d[vp].u, clean2d[vp].v,
+                        clean2d[vi].u, clean2d[vi].v,
+                        clean2d[vn].u, clean2d[vn].v,
+                        clean2d[vk].u, clean2d[vk].v)) {
+                    anyInside = true;
+                    break;
+                }
+            }
+            if (anyInside) continue;
+
+            if (edgeIntersectsHoleEdges(clean2d[vp], clean2d[vn], holePoly2d)) continue;
+
+            uint32_t baseIdx = static_cast<uint32_t>(outVertices.size());
+            outVertices.emplace_back(clean3d[vp], z_axis, clean2d[vp]);
+            outVertices.emplace_back(clean3d[vi], z_axis, clean2d[vi]);
+            outVertices.emplace_back(clean3d[vn], z_axis, clean2d[vn]);
+            outTriangles.emplace_back(baseIdx, baseIdx + 1, baseIdx + 2);
+
+            auto eraseIt = it;
+            if (it == remaining.begin()) it = std::prev(remaining.end());
+            else --it;
+            remaining.erase(eraseIt);
+            earFound = true;
+            break;
+        }
+        if (!earFound) break;
+    }
+
+    if (remaining.size() == 3) {
+        uint32_t baseIdx = static_cast<uint32_t>(outVertices.size());
+        for (size_t idx : remaining) {
+            outVertices.emplace_back(clean3d[idx], z_axis, clean2d[idx]);
+        }
+        outTriangles.emplace_back(baseIdx, baseIdx + 1, baseIdx + 2);
+    }
+}
 
 std::vector<LinearRingPtr> extractOpeningRings(const AbstractOpening& opening) {
-    (void)opening;
-    return {};
+    std::vector<LinearRingPtr> result;
+    MultiSurfacePtr ms = opening.getMultiSurface();
+    if (!ms) return result;
+
+    for (size_t i = 0; i < ms->getGeometriesCount(); ++i) {
+        PolygonPtr poly = ms->getGeometry(i);
+        if (!poly) continue;
+
+        LinearRingPtr exterior = poly->getExteriorRing();
+        if (exterior && exterior->getPointsCount() >= 3) {
+            result.push_back(exterior);
+        }
+        for (size_t r = 0; r < poly->getInteriorRingsCount(); ++r) {
+            LinearRingPtr interior = poly->getInteriorRing(r);
+            if (interior && interior->getPointsCount() >= 3) {
+                result.push_back(interior);
+            }
+        }
+    }
+    return result;
 }
 
 std::shared_ptr<MultiSurface> selectMultiSurface(const CityObject& obj, int targetLOD) {
-    (void)obj; (void)targetLOD;
-    return nullptr;
+    if (targetLOD == -1) {
+        if (obj.getLod4MultiSurface()) return obj.getLod4MultiSurface();
+        if (obj.getLod3MultiSurface()) return obj.getLod3MultiSurface();
+        if (obj.getLod2MultiSurface()) return obj.getLod2MultiSurface();
+        if (obj.getLod1MultiSurface()) return obj.getLod1MultiSurface();
+        if (obj.getLod0MultiSurface()) return obj.getLod0MultiSurface();
+        if (obj.getLod0FootPrint()) return obj.getLod0FootPrint();
+        if (obj.getLod0RoofEdge()) return obj.getLod0RoofEdge();
+        return nullptr;
+    }
+    switch (targetLOD) {
+        case 0:
+            if (obj.getLod0MultiSurface()) return obj.getLod0MultiSurface();
+            if (obj.getLod0FootPrint()) return obj.getLod0FootPrint();
+            if (obj.getLod0RoofEdge()) return obj.getLod0RoofEdge();
+            return nullptr;
+        case 1: return obj.getLod1MultiSurface();
+        case 2: return obj.getLod2MultiSurface();
+        case 3: return obj.getLod3MultiSurface();
+        case 4: return obj.getLod4MultiSurface();
+        default: return nullptr;
+    }
 }
 
 std::shared_ptr<Solid> selectSolid(const CityObject& obj, int targetLOD) {
-    (void)obj; (void)targetLOD;
-    return nullptr;
+    if (targetLOD == -1) {
+        if (obj.getLod4Solid()) return obj.getLod4Solid();
+        if (obj.getLod3Solid()) return obj.getLod3Solid();
+        if (obj.getLod2Solid()) return obj.getLod2Solid();
+        if (obj.getLod1Solid()) return obj.getLod1Solid();
+        return nullptr;
+    }
+    switch (targetLOD) {
+        case 1: return obj.getLod1Solid();
+        case 2: return obj.getLod2Solid();
+        case 3: return obj.getLod3Solid();
+        case 4: return obj.getLod4Solid();
+        default: return nullptr;
+    }
 }
 
 } // namespace citygml
