@@ -212,10 +212,10 @@ static void buildLocalFrame(const std::vector<Vec3>& pts,
         const Vec2& next = raw2d[(i + 1) % m];
         if (std::abs(triangleArea2D(prev.u, prev.v, curr.u, curr.v, next.u, next.v)) > 1e-10) {
             out3d.push_back(pts[start + i]);
-            if (uvPts && start + i < uvPts->size()) {
-                out2d.push_back((*uvPts)[start + i]);
+            if (uvPts && i < uvPts->size()) {
+                out2d.push_back((*uvPts)[i]);
             } else {
-                out2d.push_back(curr);  // use local projection as fallback UV
+                out2d.push_back(curr);
             }
         }
     }
