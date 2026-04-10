@@ -17,6 +17,7 @@ class MultiPoint;
 class MultiCurve;
 class Solid;
 class LinearRing;
+class ImplicitGeometry;
 
 class GMLGeometryParser {
 public:
@@ -36,6 +37,7 @@ public:
     
 private:
     std::shared_ptr<Polygon> parsePolygon(void* node);
+    std::shared_ptr<ImplicitGeometry> parseImplicitGeometry(void* node);
     
     std::shared_ptr<ParserContext> context_;
 };

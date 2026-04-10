@@ -109,6 +109,18 @@ public:
     std::shared_ptr<Solid> getLod4Solid() const { return lod4Solid_; }
     void setLod4Solid(SolidPtr geom) { lod4Solid_ = geom; }
 
+    // ================================================================
+    // Implicit Representations (LOD 1-3)
+    // ================================================================
+    std::shared_ptr<AbstractGeometry> getLod1ImplicitRepresentation() const { return lod1ImplicitRepresentation_; }
+    void setLod1ImplicitRepresentation(std::shared_ptr<AbstractGeometry> geom) { lod1ImplicitRepresentation_ = geom; }
+
+    std::shared_ptr<AbstractGeometry> getLod2ImplicitRepresentation() const { return lod2ImplicitRepresentation_; }
+    void setLod2ImplicitRepresentation(std::shared_ptr<AbstractGeometry> geom) { lod2ImplicitRepresentation_ = geom; }
+
+    std::shared_ptr<AbstractGeometry> getLod3ImplicitRepresentation() const { return lod3ImplicitRepresentation_; }
+    void setLod3ImplicitRepresentation(std::shared_ptr<AbstractGeometry> geom) { lod3ImplicitRepresentation_ = geom; }
+
     // 主题表面（bldg:boundedBy 中的面）
     const std::vector<std::shared_ptr<AbstractThematicSurface>>& getBoundedBySurfaces() const { return boundedBy_; }
     void addBoundedBySurface(std::shared_ptr<AbstractThematicSurface> surface) { boundedBy_.push_back(surface); }
@@ -158,6 +170,11 @@ private:
     // LOD 4
     MultiSurfacePtr lod4MultiSurface_;
     SolidPtr lod4Solid_;
+
+    // Implicit Representations (LOD 1-3)
+    std::shared_ptr<AbstractGeometry> lod1ImplicitRepresentation_;
+    std::shared_ptr<AbstractGeometry> lod2ImplicitRepresentation_;
+    std::shared_ptr<AbstractGeometry> lod3ImplicitRepresentation_;
 
     std::vector<std::shared_ptr<AbstractThematicSurface>> boundedBy_;
     std::vector<std::shared_ptr<AbstractOpening>> openings_;

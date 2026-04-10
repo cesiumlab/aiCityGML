@@ -513,10 +513,66 @@ void MeshGenerator::triangulateThematicSurface(const AbstractThematicSurface& su
 // ================================================================
 // ImplicitGeometry support
 // ================================================================
+static Vec3 transformVertexPos(const Vec3& v, const TransformationMatrix4x4& m, const Vec3& ref) {
+    double x = m[0] * v.x + m[1] * v.y + m[2] * v.z;
+    double y = m[4] * v.x + m[5] * v.y + m[6] * v.z;
+    double z = m[8] * v.x + m[9] * v.y + m[10] * v.z;
+    return {x + ref.x, y + ref.y, z + ref.z};
+}
+
+static Vec3 transformNormal(const Vec3& n, const TransformationMatrix4x4& m) {
+    double x = m[0] * n.x + m[1] * n.y + m[2] * n.z;
+    double y = m[4] * n.x + m[5] * n.y + m[6] * n.z;
+    double z = m[8] * n.x + m[9] * n.y + m[10] * n.z;
+    return Vec3{x, y, z}.normalized();
+}
+
 void MeshGenerator::triangulateImplicitGeometry(const ImplicitGeometry& impl,
                                                Mesh& outMesh) {
-    (void)impl;
     outMesh.clear();
+    if (!impl.relativeGeometry) return;
+
+    // Reference point (translation origin); default to origin if not set.
+    Vec3 ref{0, 0, 0};
+    if (impl.referencePoint) {
+        ref = {impl.referencePoint->x(), impl.referencePoint->y(), impl.referencePoint->z()};
+    }
+
+    const TransformationMatrix4x4& m = impl.transformationMatrix;
+
+    if (auto ms = std::dynamic_pointer_cast<MultiSurface>(impl.relativeGeometry)) {
+        outMesh.name = impl.getId().empty() ? "ImplicitGeometry" : impl.getId();
+        Mesh tmp;
+        triangulateMultiSurface(*ms, tmp, Material{});
+        for (SubMesh& sm : tmp.subMeshes) {
+            SubMesh& outSm = outMesh.addSubMesh(sm.material);
+            outSm.vertices.reserve(sm.vertices.size());
+            for (const Vertex& v : sm.vertices) {
+                Vertex tv;
+                tv.position = transformVertexPos(v.position, m, ref);
+                tv.normal   = transformNormal(v.normal, m);
+                tv.uv       = v.uv;
+                outSm.vertices.push_back(tv);
+            }
+            outSm.triangles = sm.triangles;
+        }
+    } else if (auto solid = std::dynamic_pointer_cast<Solid>(impl.relativeGeometry)) {
+        outMesh.name = impl.getId().empty() ? "ImplicitGeometry" : impl.getId();
+        Mesh tmp;
+        triangulateSolid(*solid, tmp, Material{});
+        for (SubMesh& sm : tmp.subMeshes) {
+            SubMesh& outSm = outMesh.addSubMesh(sm.material);
+            outSm.vertices.reserve(sm.vertices.size());
+            for (const Vertex& v : sm.vertices) {
+                Vertex tv;
+                tv.position = transformVertexPos(v.position, m, ref);
+                tv.normal   = transformNormal(v.normal, m);
+                tv.uv       = v.uv;
+                outSm.vertices.push_back(tv);
+            }
+            outSm.triangles = sm.triangles;
+        }
+    }
 }
 
 // ================================================================

@@ -75,6 +75,7 @@ std::shared_ptr<CityObject> CityGMLReader::readCityObject(void* node) {
     parseNameAndDescription(node, cityObject);
     parseBoundedBy(node, cityObject);
     parseLODGeometries(node, cityObject);
+    parseImplicitRepresentation(node, cityObject);
     
     return cityObject;
 }
@@ -99,6 +100,7 @@ std::shared_ptr<CityObject> CityGMLReader::readBuilding(void* node) {
     parseGenericAttributes(node, building);
     parseBuildingAttributes(node, building);
     parseLODGeometries(node, building);
+    parseImplicitRepresentation(node, building);
 
     return building;
 }
@@ -740,6 +742,48 @@ void CityGMLReader::parseLODGeometries(void* node, std::shared_ptr<CityObject> o
                         case 4: obj->setLod4Solid(solid); break;
                     }
                 }
+            }
+        }
+    }
+}
+
+void CityGMLReader::parseImplicitRepresentation(void* node, std::shared_ptr<CityObject> obj) {
+    // Parse lod1ImplicitRepresentation
+    {
+        void* implRepNode = XMLDocument::child(node, "lod1ImplicitRepresentation");
+        if (!implRepNode) implRepNode = XMLDocument::child(node, "bldg:lod1ImplicitRepresentation");
+        if (!implRepNode) implRepNode = XMLDocument::child(node, "gen:lod1ImplicitRepresentation");
+        if (implRepNode) {
+            void* implNode = XMLDocument::firstChildElement(implRepNode);
+            if (implNode) {
+                auto geom = geometryParser_->parseGeometry(implNode);
+                if (geom) obj->setLod1ImplicitRepresentation(geom);
+            }
+        }
+    }
+    // Parse lod2ImplicitRepresentation
+    {
+        void* implRepNode = XMLDocument::child(node, "lod2ImplicitRepresentation");
+        if (!implRepNode) implRepNode = XMLDocument::child(node, "bldg:lod2ImplicitRepresentation");
+        if (!implRepNode) implRepNode = XMLDocument::child(node, "gen:lod2ImplicitRepresentation");
+        if (implRepNode) {
+            void* implNode = XMLDocument::firstChildElement(implRepNode);
+            if (implNode) {
+                auto geom = geometryParser_->parseGeometry(implNode);
+                if (geom) obj->setLod2ImplicitRepresentation(geom);
+            }
+        }
+    }
+    // Parse lod3ImplicitRepresentation
+    {
+        void* implRepNode = XMLDocument::child(node, "lod3ImplicitRepresentation");
+        if (!implRepNode) implRepNode = XMLDocument::child(node, "bldg:lod3ImplicitRepresentation");
+        if (!implRepNode) implRepNode = XMLDocument::child(node, "gen:lod3ImplicitRepresentation");
+        if (implRepNode) {
+            void* implNode = XMLDocument::firstChildElement(implRepNode);
+            if (implNode) {
+                auto geom = geometryParser_->parseGeometry(implNode);
+                if (geom) obj->setLod3ImplicitRepresentation(geom);
             }
         }
     }

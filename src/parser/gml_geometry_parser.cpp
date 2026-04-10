@@ -37,6 +37,9 @@ std::shared_ptr<AbstractGeometry> GMLGeometryParser::parseGeometry(void* node) {
     else if (name == "Polygon" || name == "gml:Polygon") {
         geom = parsePolygon(node);
     }
+    else if (name == "ImplicitGeometry" || name == "gml:ImplicitGeometry") {
+        geom = parseImplicitGeometry(node);
+    }
 
     if (geom) {
         std::string srs = XMLDocument::attribute(node, "srsName");
@@ -317,6 +320,57 @@ std::shared_ptr<LinearRing> GMLGeometryParser::parseLinearRing(void* node) {
     }
     
     return ring;
+}
+
+std::shared_ptr<ImplicitGeometry> GMLGeometryParser::parseImplicitGeometry(void* node) {
+    if (!node) return nullptr;
+
+    auto impl = std::make_shared<ImplicitGeometry>();
+
+    // Parse gml:id
+    std::string gmlId = XMLDocument::attribute(node, "gml:id");
+    if (!gmlId.empty()) {
+        impl->setId(gmlId);
+    }
+
+    // Parse mimeType
+    void* mimeNode = XMLDocument::child(node, "mimeType");
+    if (!mimeNode) mimeNode = XMLDocument::child(node, "app:mimeType");
+    if (mimeNode) {
+        impl->mimeType = XMLDocument::text(mimeNode);
+    }
+
+    // Parse transformationMatrix (16 doubles in row-major order)
+    void* matrixNode = XMLDocument::child(node, "transformationMatrix");
+    if (matrixNode) {
+        std::string matrixStr = XMLDocument::text(matrixNode);
+        std::istringstream iss(matrixStr);
+        TransformationMatrix4x4 mat{};
+        for (size_t i = 0; i < 16 && iss >> mat[i]; ++i) {}
+        impl->transformationMatrix = mat;
+    }
+
+    // Parse referencePoint
+    void* refPointNode = XMLDocument::child(node, "referencePoint");
+    if (!refPointNode) refPointNode = XMLDocument::child(node, "gml:referencePoint");
+    if (refPointNode) {
+        void* pointNode = XMLDocument::firstChildElement(refPointNode);
+        if (pointNode) {
+            impl->referencePoint = parsePoint(pointNode);
+        }
+    }
+
+    // Parse relativeGeometry (recursive)
+    void* relGeomNode = XMLDocument::child(node, "relativeGeometry");
+    if (!relGeomNode) relGeomNode = XMLDocument::child(node, "gml:relativeGeometry");
+    if (relGeomNode) {
+        void* geomNode = XMLDocument::firstChildElement(relGeomNode);
+        if (geomNode) {
+            impl->relativeGeometry = parseGeometry(geomNode);
+        }
+    }
+
+    return impl;
 }
 
 } // namespace citygml

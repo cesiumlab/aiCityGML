@@ -33,6 +33,7 @@ private:
     void parseRelativeToTerrain(void* node, std::shared_ptr<CityObject> obj);
     void parseGenericAttributes(void* node, std::shared_ptr<CityObject> obj);
     void parseBuildingAttributes(void* node, std::shared_ptr<CityObject> obj);
+    void parseImplicitRepresentation(void* node, std::shared_ptr<CityObject> obj);
     void parseLODGeometries(void* node, std::shared_ptr<CityObject> obj);
     std::string getLocalName(void* node);
     
