@@ -22,6 +22,12 @@ public:
     
 private:
     void parseBoundedBy(void* node, std::shared_ptr<CityObject> obj);
+    void parseBoundedByElement(void* boundedByNode, std::shared_ptr<CityObject> obj);
+    std::shared_ptr<AbstractThematicSurface> createThematicSurface(const std::string& type);
+    void parseOpenings(void* parentNode, std::shared_ptr<AbstractThematicSurface> surface);
+    std::shared_ptr<AbstractOpening> createOpening(const std::string& type);
+    void parseInteriorRooms(void* node, std::shared_ptr<CityObject> obj);
+    void parseAddresses(void* node, std::shared_ptr<CityObject> obj);
     void parseNameAndDescription(void* node, std::shared_ptr<CityObject> obj);
     void parseCreationDate(void* node, std::shared_ptr<CityObject> obj);
     void parseRelativeToTerrain(void* node, std::shared_ptr<CityObject> obj);

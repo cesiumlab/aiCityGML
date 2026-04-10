@@ -2,6 +2,7 @@
 #include "tinyxml2.h"
 #include <vector>
 #include <string>
+#include <cstring>
 
 namespace citygml {
 
@@ -17,8 +18,7 @@ static std::string getLocalName(const char* name) {
 
 static bool nameMatches(const char* nodeName, const std::string& targetName) {
     if (!nodeName) return false;
-    std::string nodeLocalName = getLocalName(nodeName);
-    return nodeLocalName == targetName;
+    return getLocalName(nodeName) == targetName;
 }
 
 struct XMLDocument::Impl {
@@ -59,9 +59,8 @@ const char* XMLDocument::errorStr() const {
 void* XMLDocument::child(void* node, const std::string& name) {
     if (!node) return nullptr;
     auto* elem = static_cast<tinyxml2::XMLElement*>(node);
-    auto* child = elem->FirstChildElement(name.c_str());
-    if (child) return child;
-    child = elem->FirstChildElement();
+    // 直接遍历所有子元素，按 local name 精确匹配，避免迭代器状态错位
+    auto* child = elem->FirstChildElement();
     while (child) {
         if (nameMatches(child->Name(), name)) {
             return child;
@@ -75,18 +74,10 @@ std::vector<void*> XMLDocument::children(void* node, const std::string& name) {
     std::vector<void*> result;
     if (!node) return result;
     auto* elem = static_cast<tinyxml2::XMLElement*>(node);
-    for (auto* child = elem->FirstChildElement(name.c_str());
-         child != nullptr;
-         child = child->NextSiblingElement(name.c_str())) {
-        result.push_back(child);
-    }
-    if (result.empty()) {
-        for (auto* child = elem->FirstChildElement();
-             child != nullptr;
-             child = child->NextSiblingElement()) {
-            if (nameMatches(child->Name(), name)) {
-                result.push_back(child);
-            }
+    // 始终遍历所有子元素，按 local name 精确匹配
+    for (auto* child = elem->FirstChildElement(); child != nullptr; child = child->NextSiblingElement()) {
+        if (nameMatches(child->Name(), name)) {
+            result.push_back(child);
         }
     }
     return result;
@@ -95,15 +86,53 @@ std::vector<void*> XMLDocument::children(void* node, const std::string& name) {
 std::string XMLDocument::attribute(void* node, const std::string& name) {
     if (!node) return "";
     auto* elem = static_cast<tinyxml2::XMLElement*>(node);
+    // 优先直接查找
     const char* attr = elem->Attribute(name.c_str());
-    return attr ? std::string(attr) : "";
+    if (attr) return std::string(attr);
+    // 回退：遍历所有属性，按 local name 匹配（支持 xlink:href 等命名空间前缀）
+    for (auto* a = elem->FirstAttribute(); a != nullptr; a = a->Next()) {
+        if (nameMatches(a->Name(), name)) {
+            return std::string(a->Value());
+        }
+    }
+    return "";
 }
 
 std::string XMLDocument::text(void* node) {
     if (!node) return "";
     auto* elem = static_cast<tinyxml2::XMLElement*>(node);
+    // 优先直接获取文本节点（处理 <gen:value>纯文本</gen:value>）
     const char* txt = elem->GetText();
-    return txt ? std::string(txt) : "";
+    if (txt && strlen(txt) > 0) {
+        return std::string(txt);
+    }
+    // 递归收集所有直接子 Text 节点
+    std::string result;
+    for (auto* child = elem->FirstChild(); child; child = child->NextSibling()) {
+        if (child->ToText()) {
+            result += child->ToText()->Value();
+        }
+    }
+    if (!result.empty()) return result;
+    // 处理 <gen:value xlink:href="..."/> 这种只有属性没有文本的情况
+    // 尝试 xlink:href（CityGML 标准方式）
+    const char* href = elem->Attribute("xlink:href");
+    if (!href) href = elem->Attribute("xlink_href"); // TinyXML2 将冒号转为下划线
+    if (!href) href = elem->Attribute("href");
+    if (href && strlen(href) > 0) {
+        return std::string(href);
+    }
+    // 遍历所有属性，查找任意名为 href 或 *:href 的属性
+    for (auto* a = elem->FirstAttribute(); a != nullptr; a = a->Next()) {
+        std::string attrName = a->Name();
+        if (attrName == "href" || attrName == "xlink:href" || attrName == "xlink_href" ||
+            attrName.find(":href") != std::string::npos) {
+            if (a->Value() && strlen(a->Value()) > 0) {
+                return std::string(a->Value());
+            }
+        }
+    }
+    return "";
 }
 
 std::string XMLDocument::nodeName(void* node) {
@@ -118,7 +147,17 @@ void* XMLDocument::firstChildElement(void* node, const std::string& name) {
     if (name.empty()) {
         return elem->FirstChildElement();
     }
-    return child(node, name);
+    // TinyXML2 的 FirstChildElement(name) 是状态迭代器，
+    // 会影响后续 FirstChildElement() 的起始位置，导致遍历错位。
+    // 因此直接遍历所有子元素，按 local name 精确匹配。
+    auto* child = elem->FirstChildElement();
+    while (child) {
+        if (nameMatches(child->Name(), name)) {
+            return child;
+        }
+        child = child->NextSiblingElement();
+    }
+    return nullptr;
 }
 
 void* XMLDocument::nextSiblingElement(void* node, const std::string& name) {
@@ -127,9 +166,8 @@ void* XMLDocument::nextSiblingElement(void* node, const std::string& name) {
     if (name.empty()) {
         return elem->NextSiblingElement();
     }
-    auto* sibling = elem->NextSiblingElement(name.c_str());
-    if (sibling) return sibling;
-    sibling = elem->NextSiblingElement();
+    // 始终遍历兄弟元素，按 local name 精确匹配（不依赖 TinyXML2 的命名过滤迭代器）
+    auto* sibling = elem->NextSiblingElement();
     while (sibling) {
         if (nameMatches(sibling->Name(), name)) {
             return sibling;

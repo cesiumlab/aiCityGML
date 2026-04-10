@@ -185,22 +185,65 @@ int main(int argc, char* argv[]) {
         // LOD Geometries
         std::cout << "    LOD Geometries:" << std::endl;
         bool hasGeom = false;
-        for (int lod = 0; lod <= 4; ++lod) {
-            auto geom = obj->getLODGeometry(lod);
-            if (geom) {
-                hasGeom = true;
-                GeometryType type = geom->getType();
-                std::string typeName;
-                switch (type) {
-                    case GeometryType::GT_Polygon: typeName = "Polygon"; break;
-                    case GeometryType::GT_MultiSurface: typeName = "MultiSurface"; break;
-                    case GeometryType::GT_Solid: typeName = "Solid"; break;
-                    case GeometryType::GT_CompositeSolid: typeName = "CompositeSolid"; break;
-                    default: typeName = "Other"; break;
-                }
-                std::cout << "      LOD" << lod << ": " << typeName
-                          << " (SRS: " << (geom->getSrsName().empty() ? "none" : geom->getSrsName()) << ")" << std::endl;
-            }
+        // LOD 0
+        if (obj->getLod0FootPrint()) {
+            hasGeom = true;
+            std::cout << "      LOD0: MultiSurface (FootPrint, SRS: "
+                      << (obj->getLod0FootPrint()->getSrsName().empty() ? "none" : obj->getLod0FootPrint()->getSrsName()) << ")" << std::endl;
+        }
+        if (obj->getLod0RoofEdge()) {
+            hasGeom = true;
+            std::cout << "      LOD0: MultiSurface (RoofEdge, SRS: "
+                      << (obj->getLod0RoofEdge()->getSrsName().empty() ? "none" : obj->getLod0RoofEdge()->getSrsName()) << ")" << std::endl;
+        }
+        if (obj->getLod0MultiSurface()) {
+            hasGeom = true;
+            std::cout << "      LOD0: MultiSurface (SRS: "
+                      << (obj->getLod0MultiSurface()->getSrsName().empty() ? "none" : obj->getLod0MultiSurface()->getSrsName()) << ")" << std::endl;
+        }
+        // LOD 1
+        if (obj->getLod1MultiSurface()) {
+            hasGeom = true;
+            std::cout << "      LOD1: MultiSurface (SRS: "
+                      << (obj->getLod1MultiSurface()->getSrsName().empty() ? "none" : obj->getLod1MultiSurface()->getSrsName()) << ")" << std::endl;
+        }
+        if (obj->getLod1Solid()) {
+            hasGeom = true;
+            std::cout << "      LOD1: Solid (SRS: "
+                      << (obj->getLod1Solid()->getSrsName().empty() ? "none" : obj->getLod1Solid()->getSrsName()) << ")" << std::endl;
+        }
+        // LOD 2
+        if (obj->getLod2MultiSurface()) {
+            hasGeom = true;
+            std::cout << "      LOD2: MultiSurface (SRS: "
+                      << (obj->getLod2MultiSurface()->getSrsName().empty() ? "none" : obj->getLod2MultiSurface()->getSrsName()) << ")" << std::endl;
+        }
+        if (obj->getLod2Solid()) {
+            hasGeom = true;
+            std::cout << "      LOD2: Solid (SRS: "
+                      << (obj->getLod2Solid()->getSrsName().empty() ? "none" : obj->getLod2Solid()->getSrsName()) << ")" << std::endl;
+        }
+        // LOD 3
+        if (obj->getLod3MultiSurface()) {
+            hasGeom = true;
+            std::cout << "      LOD3: MultiSurface (SRS: "
+                      << (obj->getLod3MultiSurface()->getSrsName().empty() ? "none" : obj->getLod3MultiSurface()->getSrsName()) << ")" << std::endl;
+        }
+        if (obj->getLod3Solid()) {
+            hasGeom = true;
+            std::cout << "      LOD3: Solid (SRS: "
+                      << (obj->getLod3Solid()->getSrsName().empty() ? "none" : obj->getLod3Solid()->getSrsName()) << ")" << std::endl;
+        }
+        // LOD 4
+        if (obj->getLod4MultiSurface()) {
+            hasGeom = true;
+            std::cout << "      LOD4: MultiSurface (SRS: "
+                      << (obj->getLod4MultiSurface()->getSrsName().empty() ? "none" : obj->getLod4MultiSurface()->getSrsName()) << ")" << std::endl;
+        }
+        if (obj->getLod4Solid()) {
+            hasGeom = true;
+            std::cout << "      LOD4: Solid (SRS: "
+                      << (obj->getLod4Solid()->getSrsName().empty() ? "none" : obj->getLod4Solid()->getSrsName()) << ")" << std::endl;
         }
         if (!hasGeom) {
             std::cout << "      (none)" << std::endl;
@@ -226,51 +269,61 @@ int main(int argc, char* argv[]) {
     int totalPolygons = 0;
     size_t totalPoints = 0;
 
-    for (auto& obj : objects) {
-        for (int lod = 0; lod <= 4; ++lod) {
-            auto geom = obj->getLODGeometry(lod);
-            if (geom) {
-                lodCounts[lod]++;
-                std::function<void(AbstractGeometryPtr)> countGeom = [&](AbstractGeometryPtr g) {
-                    if (!g) return;
-                    switch (g->getType()) {
-                        case GeometryType::GT_Polygon: {
-                            auto poly = std::dynamic_pointer_cast<Polygon>(g);
-                            if (poly && poly->getExteriorRing()) {
-                                totalPolygons++;
-                                totalPoints += poly->getExteriorRing()->getPointsCount();
-                            }
-                            break;
-                        }
-                        case GeometryType::GT_MultiSurface:
-                        case GeometryType::GT_CompositeSurface: {
-                            auto ms = std::dynamic_pointer_cast<MultiSurface>(g);
-                            if (ms) {
-                                for (size_t j = 0; j < ms->getGeometriesCount(); ++j) {
-                                    countGeom(ms->getGeometry(j));
-                                }
-                            }
-                            break;
-                        }
-                        case GeometryType::GT_Solid:
-                        case GeometryType::GT_CompositeSolid: {
-                            auto solid = std::dynamic_pointer_cast<Solid>(g);
-                            if (solid) {
-                                auto shell = solid->getOuterShell();
-                                if (shell) {
-                                    for (size_t j = 0; j < shell->getGeometriesCount(); ++j) {
-                                        countGeom(shell->getGeometry(j));
-                                    }
-                                }
-                            }
-                            break;
-                        }
-                        default: break;
-                    }
-                };
-                countGeom(geom);
+    std::function<void(AbstractGeometryPtr)> countGeom = [&](AbstractGeometryPtr g) {
+        if (!g) return;
+        switch (g->getType()) {
+            case GeometryType::GT_Polygon: {
+                auto poly = std::dynamic_pointer_cast<Polygon>(g);
+                if (poly && poly->getExteriorRing()) {
+                    totalPolygons++;
+                    totalPoints += poly->getExteriorRing()->getPointsCount();
+                }
+                break;
             }
+            case GeometryType::GT_MultiSurface:
+            case GeometryType::GT_CompositeSurface: {
+                auto ms = std::dynamic_pointer_cast<MultiSurface>(g);
+                if (ms) {
+                    for (size_t j = 0; j < ms->getGeometriesCount(); ++j) {
+                        countGeom(ms->getGeometry(j));
+                    }
+                }
+                break;
+            }
+            case GeometryType::GT_Solid:
+            case GeometryType::GT_CompositeSolid: {
+                auto solid = std::dynamic_pointer_cast<Solid>(g);
+                if (solid) {
+                    auto shell = solid->getOuterShell();
+                    if (shell) {
+                        for (size_t j = 0; j < shell->getGeometriesCount(); ++j) {
+                            countGeom(shell->getGeometry(j));
+                        }
+                    }
+                }
+                break;
+            }
+            default: break;
         }
+    };
+
+    for (auto& obj : objects) {
+        // LOD 0
+        if (obj->getLod0FootPrint()) { lodCounts[0]++; countGeom(obj->getLod0FootPrint()); }
+        if (obj->getLod0RoofEdge()) { lodCounts[0]++; countGeom(obj->getLod0RoofEdge()); }
+        if (obj->getLod0MultiSurface()) { lodCounts[0]++; countGeom(obj->getLod0MultiSurface()); }
+        // LOD 1
+        if (obj->getLod1MultiSurface()) { lodCounts[1]++; countGeom(obj->getLod1MultiSurface()); }
+        if (obj->getLod1Solid()) { lodCounts[1]++; countGeom(obj->getLod1Solid()); }
+        // LOD 2
+        if (obj->getLod2MultiSurface()) { lodCounts[2]++; countGeom(obj->getLod2MultiSurface()); }
+        if (obj->getLod2Solid()) { lodCounts[2]++; countGeom(obj->getLod2Solid()); }
+        // LOD 3
+        if (obj->getLod3MultiSurface()) { lodCounts[3]++; countGeom(obj->getLod3MultiSurface()); }
+        if (obj->getLod3Solid()) { lodCounts[3]++; countGeom(obj->getLod3Solid()); }
+        // LOD 4
+        if (obj->getLod4MultiSurface()) { lodCounts[4]++; countGeom(obj->getLod4MultiSurface()); }
+        if (obj->getLod4Solid()) { lodCounts[4]++; countGeom(obj->getLod4Solid()); }
     }
 
     std::cout << "  LOD0 Objects: " << lodCounts[0] << std::endl;

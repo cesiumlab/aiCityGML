@@ -54,11 +54,20 @@ class GenericAttributeDouble : public GenericAttribute {
 public:
     GenericAttributeDouble(const std::string& name, double value)
         : value_(value) { name_ = name; }
+    GenericAttributeDouble(const std::string& name, double value, const std::string& uom)
+        : value_(value), uom_(uom) { name_ = name; }
     double getValue() const { return value_; }
-    std::string getValueAsString() const override { return std::to_string(value_); }
+    const std::optional<std::string>& getUom() const { return uom_; }
+    std::string getValueAsString() const override {
+        if (uom_.has_value() && !uom_->empty()) {
+            return std::to_string(value_) + " " + *uom_;
+        }
+        return std::to_string(value_);
+    }
     int getType() const override { return ATTR_DOUBLE; }
 private:
     double value_;
+    std::optional<std::string> uom_;
 };
 
 class GenericAttributeURI : public GenericAttribute {

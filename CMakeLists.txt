@@ -14,6 +14,10 @@ if(MSVC_VERSION LESS 1930)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:__cplusplus")
 endif()
 
+# MSVC: Force UTF-8 source encoding
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+add_compile_definitions($<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS)
+
 # Debug: 关闭默认的 /RTC1（与 /O2 不兼容），使用 /Od
 set(CMAKE_CXX_FLAGS_DEBUG "/MDd /W4 /Od /Ob0 /Zi /D_DEBUG /EHsc")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /RTC1-")
@@ -25,8 +29,6 @@ set(CMAKE_CXX_FLAGS_RELEASE "/MD /W4 /O2 /Ob2 /GL /D NDEBUG /EHsc")
 # 依赖库
 # ============================================================
 set(TINYXML2_ROOT "${CMAKE_SOURCE_DIR}/tinyxml2-master")
-set(TINYXML2_LIB_DEBUG "${CMAKE_SOURCE_DIR}/tinyxml2-master/build_vs2019_debug/Debug/tinyxml2.lib")
-set(TINYXML2_LIB_RELEASE "${CMAKE_SOURCE_DIR}/tinyxml2-master/build_vs2019_release/Release/tinyxml2.lib")
 set(EARCUT_ROOT   "${CMAKE_SOURCE_DIR}/earcut.hpp-master")
 
 if(NOT EXISTS "${TINYXML2_ROOT}/tinyxml2.h")
@@ -35,6 +37,20 @@ endif()
 if(NOT EXISTS "${EARCUT_ROOT}/include/mapbox/earcut.hpp")
     message(FATAL_ERROR "请先编译 Earcut: e:\\opensource\\citygml\\earcut.hpp-master")
 endif()
+
+# ============================================================
+# TinyXML2 子项目（使用与主项目一致的编译配置）
+# ============================================================
+add_library(tinyxml2_lib STATIC
+    ${TINYXML2_ROOT}/tinyxml2.cpp
+    ${TINYXML2_ROOT}/tinyxml2.h
+)
+target_include_directories(tinyxml2_lib PUBLIC ${TINYXML2_ROOT})
+# 继承主项目的 C++ 标准定义
+target_compile_definitions(tinyxml2_lib PRIVATE
+    $<$<CONFIG:Debug>:_DEBUG>
+    $<$<CONFIG:Release>:NDEBUG>
+)
 
 # ============================================================
 # 头文件目录
@@ -131,11 +147,7 @@ set(ALL_SOURCES
 )
 
 add_library(citygml_obj_lib STATIC ${ALL_HEADERS} ${ALL_SOURCES})
-if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "")
-    target_link_libraries(citygml_obj_lib PRIVATE "${TINYXML2_LIB_DEBUG}")
-else()
-    target_link_libraries(citygml_obj_lib PRIVATE "${TINYXML2_LIB_RELEASE}")
-endif()
+target_link_libraries(citygml_obj_lib PRIVATE tinyxml2_lib)
 
 # ============================================================
 # 测试程序

@@ -133,11 +133,22 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
     // Step 2: Build polygon ID map for bidirectional association
     std::map<std::string, std::shared_ptr<citygml::Polygon>> polygonMap;
     for (const auto& cityObj : cityModel->getCityObjects()) {
-        for (int lod = 0; lod <= 4; ++lod) {
-            auto geom = cityObj->getLODGeometry(lod);
-            if (!geom) continue;
-            collectPolygons(geom, polygonMap);
-        }
+        // LOD 0
+        if (cityObj->getLod0FootPrint()) collectPolygons(cityObj->getLod0FootPrint(), polygonMap);
+        if (cityObj->getLod0RoofEdge()) collectPolygons(cityObj->getLod0RoofEdge(), polygonMap);
+        if (cityObj->getLod0MultiSurface()) collectPolygons(cityObj->getLod0MultiSurface(), polygonMap);
+        // LOD 1
+        if (cityObj->getLod1MultiSurface()) collectPolygons(cityObj->getLod1MultiSurface(), polygonMap);
+        if (cityObj->getLod1Solid()) collectPolygons(cityObj->getLod1Solid(), polygonMap);
+        // LOD 2
+        if (cityObj->getLod2MultiSurface()) collectPolygons(cityObj->getLod2MultiSurface(), polygonMap);
+        if (cityObj->getLod2Solid()) collectPolygons(cityObj->getLod2Solid(), polygonMap);
+        // LOD 3
+        if (cityObj->getLod3MultiSurface()) collectPolygons(cityObj->getLod3MultiSurface(), polygonMap);
+        if (cityObj->getLod3Solid()) collectPolygons(cityObj->getLod3Solid(), polygonMap);
+        // LOD 4
+        if (cityObj->getLod4MultiSurface()) collectPolygons(cityObj->getLod4MultiSurface(), polygonMap);
+        if (cityObj->getLod4Solid()) collectPolygons(cityObj->getLod4Solid(), polygonMap);
     }
 
     // Step 3: Set appearance data for each polygon based on gml:id matching
