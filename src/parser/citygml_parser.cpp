@@ -356,15 +356,9 @@ ParameterizedTexturePtr CityGMLParser::parseParameterizedTexture(void* node) {
 
                 std::string coordsStr = XMLDocument::text(tcNode);
                 std::istringstream iss(coordsStr);
-                double v;
-                while (iss >> v) {
-                    tc.coordinates.push_back({v, 0.0});
-                }
-                if (tc.coordinates.size() % 2 == 0) {
-                    for (size_t j = 0; j < tc.coordinates.size() / 2; ++j) {
-                        tc.coordinates[j][1] = tc.coordinates[tc.coordinates.size() / 2 + j][0];
-                    }
-                    tc.coordinates.resize(tc.coordinates.size() / 2);
+                double s, t;
+                while (iss >> s >> t) {
+                    tc.coordinates.push_back({s, t});
                 }
 
                 target.textureCoords.push_back(tc);
