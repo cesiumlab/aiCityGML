@@ -5,12 +5,17 @@
 #include <memory>
 #include <map>
 #include <optional>
+#include <array>
+#include <sstream>
 
 namespace citygml {
 
 class CityModel;
 class GMLGeometryParser;
 class CityGMLReader;
+class AbstractAppearance;
+class X3DMaterial;
+class ParameterizedTexture;
 
 struct ParseResult {
     bool success = false;
@@ -72,6 +77,11 @@ private:
     
     ParseResult initializeParser(const std::string& filePath);
     ParseResult parseCityModelNode(void* node, std::shared_ptr<CityModel>& cityModel);
+
+    std::shared_ptr<AbstractAppearance> parseAppearance(void* node);
+    std::shared_ptr<X3DMaterial> parseX3DMaterial(void* node);
+    std::shared_ptr<ParameterizedTexture> parseParameterizedTexture(void* node);
+    std::array<double, 4> parseColor(const std::string& colorStr);
 };
 
 } // namespace citygml

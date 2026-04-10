@@ -5,6 +5,7 @@
 #include "citygml/core/citygml_geometry.h"
 #include "citygml/core/citygml_object.h"
 #include "citygml/core/citygml_base.h"
+#include "citygml/core/citygml_appearance.h"
 #include "citygml/building/citygml_building.h"
 
 using namespace citygml;
@@ -74,6 +75,67 @@ int main(int argc, char* argv[]) {
         printEnvelope(*optEnv, "    ");
     } else {
         std::cout << "  Envelope: (none)" << std::endl;
+    }
+
+    // ========================================
+    // 1b. Appearances
+    // ========================================
+    const auto& appearances = cityModel->getAppearances();
+    std::cout << std::endl << "  Appearances (" << appearances.size() << " found)" << std::endl;
+    if (appearances.empty()) {
+        std::cout << "    (none)" << std::endl;
+    } else {
+        for (size_t i = 0; i < appearances.size(); ++i) {
+            auto& app = appearances[i];
+            std::cout << std::endl << "    --- Appearance " << (i + 1) << " ---" << std::endl;
+            std::cout << "      ID: " << (app->getId().empty() ? "(none)" : app->getId()) << std::endl;
+            std::cout << "      Theme: " << (app->getTheme().has_value() ? *app->getTheme() : "(none)") << std::endl;
+
+            const auto& surfaceDataList = app->getSurfaceData();
+            std::cout << "      SurfaceData (" << surfaceDataList.size() << "):" << std::endl;
+            for (size_t j = 0; j < surfaceDataList.size(); ++j) {
+                auto& sd = surfaceDataList[j];
+                std::cout << "        --- SurfaceData " << (j + 1) << " ---" << std::endl;
+                std::cout << "          ID: " << (sd->getId().empty() ? "(none)" : sd->getId()) << std::endl;
+                std::cout << "          Theme: " << (sd->getTheme().has_value() ? *sd->getTheme() : "(none)") << std::endl;
+
+                auto mat = std::dynamic_pointer_cast<X3DMaterial>(sd);
+                if (mat) {
+                    std::cout << "          Type: X3DMaterial" << std::endl;
+                    auto& dc = mat->getDiffuseColor();
+                    std::cout << std::fixed << std::setprecision(4)
+                              << "          DiffuseColor: (" << dc[0] << ", " << dc[1] << ", " << dc[2] << ", " << dc[3] << ")" << std::endl;
+                    std::cout << "          Transparency: " << mat->getTransparency() << std::endl;
+                    std::cout << "          Shininess: " << mat->getShininess() << std::endl;
+                    std::cout << "          IsSmooth: " << (mat->getIsSmooth() ? "true" : "false") << std::endl;
+                    const auto& targets = mat->getTargets();
+                    std::cout << "          Targets (" << targets.size() << "):" << std::endl;
+                    for (const auto& t : targets) {
+                        std::cout << "            - " << t << std::endl;
+                    }
+                }
+
+                auto tex = std::dynamic_pointer_cast<ParameterizedTexture>(sd);
+                if (tex) {
+                    std::cout << "          Type: ParameterizedTexture" << std::endl;
+                    std::cout << "          ImageURI: " << (tex->getImageURI().empty() ? "(none)" : tex->getImageURI()) << std::endl;
+                    std::cout << "          MimeType: " << (tex->getMimeType().empty() ? "(none)" : tex->getMimeType()) << std::endl;
+                    const auto& texTargets = tex->getTargets();
+                    std::cout << "          Targets (" << texTargets.size() << "):" << std::endl;
+                    for (const auto& tt : texTargets) {
+                        std::cout << "            - URI: " << tt.uri << std::endl;
+                        for (const auto& tc : tt.textureCoords) {
+                            std::cout << "              ring: " << tc.ringId
+                                      << " coords: (" << tc.coordinates.size() << " points)";
+                            if (!tc.coordinates.empty()) {
+                                std::cout << " first=(" << tc.coordinates[0][0] << "," << tc.coordinates[0][1] << ")";
+                            }
+                            std::cout << std::endl;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ========================================
