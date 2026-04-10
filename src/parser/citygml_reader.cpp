@@ -3,6 +3,10 @@
 #include "citygml/parser/gml_envelope_parser.h"
 #include "citygml/parser/gml_geometry_parser.h"
 #include "citygml/core/citygml_object.h"
+#include "citygml/core/citygml_base.h"
+#include "citygml/core/citygml_feature.h"
+#include <sstream>
+#include <iomanip>
 
 namespace citygml {
 
@@ -75,11 +79,21 @@ std::shared_ptr<CityObject> CityGMLReader::readCityObject(void* node) {
 
 std::shared_ptr<CityObject> CityGMLReader::readBuilding(void* node) {
     auto building = std::make_shared<CityObject>("Building");
-    
+
+    // 解析 ID (gml:id)
+    std::string gmlId = XMLDocument::attribute(node, "gml:id");
+    if (!gmlId.empty()) {
+        building->setId(gmlId);
+    }
+
     parseNameAndDescription(node, building);
     parseBoundedBy(node, building);
+    parseCreationDate(node, building);
+    parseRelativeToTerrain(node, building);
+    parseGenericAttributes(node, building);
+    parseBuildingAttributes(node, building);
     parseLODGeometries(node, building);
-    
+
     return building;
 }
 
@@ -101,7 +115,7 @@ void CityGMLReader::parseNameAndDescription(void* node, std::shared_ptr<CityObje
     if (nameNode) {
         obj->setName(XMLDocument::text(nameNode));
     }
-    
+
     void* descNode = XMLDocument::child(node, "description");
     if (!descNode) descNode = XMLDocument::child(node, "gml:description");
     if (descNode) {
@@ -109,14 +123,132 @@ void CityGMLReader::parseNameAndDescription(void* node, std::shared_ptr<CityObje
     }
 }
 
+void CityGMLReader::parseCreationDate(void* node, std::shared_ptr<CityObject> obj) {
+    void* dateNode = XMLDocument::child(node, "creationDate");
+    if (!dateNode) dateNode = XMLDocument::child(node, "core:creationDate");
+    if (!dateNode) return;
+
+    std::string dateStr = XMLDocument::text(dateNode);
+    if (dateStr.empty()) return;
+
+    // 解析日期格式: YYYY-MM-DD
+    DateTime dt;
+    std::istringstream iss(dateStr);
+    char delimiter;
+    iss >> dt.year >> delimiter >> dt.month >> delimiter >> dt.day;
+    if (dt.year > 0) {
+        obj->setCreationDate(dt);
+    }
+}
+
+void CityGMLReader::parseRelativeToTerrain(void* node, std::shared_ptr<CityObject> obj) {
+    void* relNode = XMLDocument::child(node, "relativeToTerrain");
+    if (!relNode) relNode = XMLDocument::child(node, "core:relativeToTerrain");
+    if (!relNode) return;
+
+    std::string val = XMLDocument::text(relNode);
+    if (val.empty()) return;
+
+    RelativeToTerrain rel = ::citygml::parseRelativeToTerrain(val);
+    obj->setRelativeToTerrain(rel);
+}
+
+void CityGMLReader::parseGenericAttributes(void* node, std::shared_ptr<CityObject> obj) {
+    // 查找 gen:stringAttribute
+    void* child = XMLDocument::firstChildElement(node, "stringAttribute");
+    if (!child) child = XMLDocument::firstChildElement(node, "gen:stringAttribute");
+
+    while (child) {
+        std::string name = XMLDocument::attribute(child, "name");
+        void* valueNode = XMLDocument::child(child, "value");
+        if (!valueNode) valueNode = XMLDocument::child(child, "gen:value");
+        if (!valueNode) valueNode = XMLDocument::firstChildElement(child);
+
+        std::string value = XMLDocument::text(valueNode);
+        if (!name.empty() && !value.empty()) {
+            auto attr = std::make_shared<GenericAttributeString>(name, value);
+            obj->addGenericAttribute(attr);
+        }
+        child = XMLDocument::nextSiblingElement(child, "stringAttribute");
+        if (!child) child = XMLDocument::nextSiblingElement(child, "gen:stringAttribute");
+    }
+
+    // 查找 gen:measureAttribute
+    child = XMLDocument::firstChildElement(node, "measureAttribute");
+    if (!child) child = XMLDocument::firstChildElement(node, "gen:measureAttribute");
+
+    while (child) {
+        std::string name = XMLDocument::attribute(child, "name");
+        void* valueNode = XMLDocument::child(child, "value");
+        if (!valueNode) valueNode = XMLDocument::child(child, "gen:value");
+        if (!valueNode) valueNode = XMLDocument::firstChildElement(child);
+
+        std::string valueStr = XMLDocument::text(valueNode);
+        if (!name.empty() && !valueStr.empty()) {
+            try {
+                double value = std::stod(valueStr);
+                auto attr = std::make_shared<GenericAttributeDouble>(name, value);
+                obj->addGenericAttribute(attr);
+            } catch (...) {}
+        }
+        child = XMLDocument::nextSiblingElement(child, "measureAttribute");
+        if (!child) child = XMLDocument::nextSiblingElement(child, "gen:measureAttribute");
+    }
+}
+
+void CityGMLReader::parseBuildingAttributes(void* node, std::shared_ptr<CityObject> obj) {
+    // 解析 bldg:yearOfConstruction
+    void* yearNode = XMLDocument::child(node, "yearOfConstruction");
+    if (!yearNode) yearNode = XMLDocument::child(node, "bldg:yearOfConstruction");
+    // 注意: yearOfConstruction 是简单整数，不是属性
+
+    // 解析 bldg:storeysAboveGround
+    void* storeysAboveNode = XMLDocument::child(node, "storeysAboveGround");
+    if (!storeysAboveNode) storeysAboveNode = XMLDocument::child(node, "bldg:storeysAboveGround");
+    if (storeysAboveNode) {
+        std::string val = XMLDocument::text(storeysAboveNode);
+        if (!val.empty()) {
+            try {
+                int storeys = std::stoi(val);
+                obj->setStoreysAboveGround(storeys);
+            } catch (...) {}
+        }
+    }
+
+    // 解析 bldg:storeysBelowGround
+    void* storeysBelowNode = XMLDocument::child(node, "storeysBelowGround");
+    if (!storeysBelowNode) storeysBelowNode = XMLDocument::child(node, "bldg:storeysBelowGround");
+    if (storeysBelowNode) {
+        std::string val = XMLDocument::text(storeysBelowNode);
+        if (!val.empty()) {
+            try {
+                int storeys = std::stoi(val);
+                obj->setStoreysBelowGround(storeys);
+            } catch (...) {}
+        }
+    }
+}
+
 void CityGMLReader::parseLODGeometries(void* node, std::shared_ptr<CityObject> obj) {
-    for (int lod = 1; lod <= 4; ++lod) {
+    // 解析 LOD0
+    for (int lod = 0; lod <= 4; ++lod) {
         // 查找 MultiSurface
         std::string lodSurfaceName1 = "lod" + std::to_string(lod) + "MultiSurface";
         std::string lodSurfaceName2 = "bldg:lod" + std::to_string(lod) + "MultiSurface";
 
         void* lodGeom = XMLDocument::child(node, lodSurfaceName1);
         if (!lodGeom) lodGeom = XMLDocument::child(node, lodSurfaceName2);
+
+        // 特殊处理 LOD0: lod0FootPrint, lod0RoofEdge
+        if (!lodGeom && lod == 0) {
+            lodGeom = XMLDocument::child(node, "lod0FootPrint");
+            if (!lodGeom) lodGeom = XMLDocument::child(node, "bldg:lod0FootPrint");
+        }
+        if (!lodGeom && lod == 0) {
+            lodGeom = XMLDocument::child(node, "lod0RoofEdge");
+            if (!lodGeom) lodGeom = XMLDocument::child(node, "bldg:lod0RoofEdge");
+        }
+
         if (lodGeom) {
             void* geometryNode = XMLDocument::firstChildElement(lodGeom);
             if (geometryNode) {

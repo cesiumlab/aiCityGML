@@ -23,6 +23,10 @@ public:
 private:
     void parseBoundedBy(void* node, std::shared_ptr<CityObject> obj);
     void parseNameAndDescription(void* node, std::shared_ptr<CityObject> obj);
+    void parseCreationDate(void* node, std::shared_ptr<CityObject> obj);
+    void parseRelativeToTerrain(void* node, std::shared_ptr<CityObject> obj);
+    void parseGenericAttributes(void* node, std::shared_ptr<CityObject> obj);
+    void parseBuildingAttributes(void* node, std::shared_ptr<CityObject> obj);
     void parseLODGeometries(void* node, std::shared_ptr<CityObject> obj);
     std::string getLocalName(void* node);
     

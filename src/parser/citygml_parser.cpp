@@ -71,6 +71,19 @@ ParseResult CityGMLParser::initializeParser(const std::string& filePath) {
 ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityModel>& cityModel) {
     cityModel = std::make_shared<CityModel>();
 
+    // 解析 ID (gml:id)
+    std::string gmlId = XMLDocument::attribute(node, "gml:id");
+    if (!gmlId.empty()) {
+        cityModel->setId(gmlId);
+    }
+
+    // 解析名称 (gml:name)
+    void* nameNode = XMLDocument::child(node, "name");
+    if (!nameNode) nameNode = XMLDocument::child(node, "gml:name");
+    if (nameNode) {
+        cityModel->setName(XMLDocument::text(nameNode));
+    }
+
     void* boundedBy = XMLDocument::child(node, "boundedBy");
     if (!boundedBy) {
         boundedBy = XMLDocument::child(node, "gml:boundedBy");
@@ -86,12 +99,12 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
             cityModel->setEnvelope(*envelope);
         }
     }
-    
+
     std::vector<void*> memberList = XMLDocument::children(node, "cityObjectMember");
     if (memberList.empty()) {
         memberList = XMLDocument::children(node, "core:cityObjectMember");
     }
-    
+
     for (size_t i = 0; i < memberList.size(); ++i) {
         void* objNode = XMLDocument::firstChildElement(memberList[i]);
         if (objNode) {
@@ -101,7 +114,7 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
             }
         }
     }
-    
+
     return ParseResult::successResult();
 }
 
