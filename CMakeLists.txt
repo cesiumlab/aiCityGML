@@ -130,12 +130,28 @@ set(CITYGML_PARSER_SOURCES
 )
 
 # ============================================================
+# CityGML Mesh 模块
+# ============================================================
+set(CITYGML_MESH_HEADERS
+    include/citygml/mesh/mesh.h
+    include/citygml/mesh/mesh_generator.h
+    include/citygml/writers/obj_writer.h
+)
+
+set(CITYGML_MESH_SOURCES
+    src/mesh/mesh.cpp
+    src/mesh/mesh_generator.cpp
+    src/writers/obj_writer.cpp
+)
+
+# ============================================================
 # 合并所有源文件
 # ============================================================
 set(ALL_HEADERS
     ${CITYGML_CORE_HEADERS}
     ${CITYGML_BUILDING_HEADERS}
     ${CITYGML_CONSTRUCTION_HEADERS}
+    ${CITYGML_MESH_HEADERS}
     ${CITYGML_PARSER_HEADERS}
 )
 
@@ -143,6 +159,7 @@ set(ALL_SOURCES
     ${CITYGML_CORE_SOURCES}
     ${CITYGML_BUILDING_SOURCES}
     ${CITYGML_CONSTRUCTION_SOURCES}
+    ${CITYGML_MESH_SOURCES}
     ${CITYGML_PARSER_SOURCES}
 )
 
@@ -154,6 +171,8 @@ target_link_libraries(citygml_obj_lib PRIVATE tinyxml2_lib)
 # ============================================================
 add_executable(test_parser test_parser.cpp)
 target_link_libraries(test_parser PRIVATE citygml_obj_lib)
+
+add_executable(test_triangulate test_triangulate.cpp)
 
 # ============================================================
 # 安装规则
