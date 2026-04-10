@@ -70,11 +70,15 @@ ParseResult CityGMLParser::initializeParser(const std::string& filePath) {
 
 ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityModel>& cityModel) {
     cityModel = std::make_shared<CityModel>();
-    
+
     void* boundedBy = XMLDocument::child(node, "boundedBy");
     if (!boundedBy) {
         boundedBy = XMLDocument::child(node, "gml:boundedBy");
     }
+    if (!boundedBy) {
+        boundedBy = XMLDocument::child(node, "core:boundedBy");
+    }
+
     if (boundedBy) {
         GMLEnvelopeParser envelopeParser;
         auto envelope = envelopeParser.parse(boundedBy, context_);

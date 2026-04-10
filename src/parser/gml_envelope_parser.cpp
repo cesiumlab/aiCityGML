@@ -4,6 +4,7 @@
 #include "citygml/core/citygml_base.h"
 #include "citygml/core/citygml_geometry.h"
 #include <sstream>
+#include <iostream>
 
 namespace citygml {
 
@@ -12,39 +13,42 @@ GMLEnvelopeParser::~GMLEnvelopeParser() = default;
 
 std::shared_ptr<Envelope> GMLEnvelopeParser::parse(void* node, std::shared_ptr<ParserContext> context) {
     if (!node) return nullptr;
-    
-    std::string srsName = getAttribute(node, "srsName");
+
+    void* envelopeNode = XMLDocument::child(node, "Envelope");
+    if (!envelopeNode) {
+        envelopeNode = XMLDocument::child(node, "gml:Envelope");
+    }
+    if (!envelopeNode) {
+        envelopeNode = node;
+    }
+
+    std::string srsName = getAttribute(envelopeNode, "srsName");
     if (context) {
         context->setSrsName(srsName);
     }
-    
-    std::string srsDimStr = getAttribute(node, "srsDimension");
+
+    std::string srsDimStr = getAttribute(envelopeNode, "srsDimension");
     int srsDimension = 3;
     if (!srsDimStr.empty()) {
         srsDimension = std::stoi(srsDimStr);
     }
-    
-    void* envelopeNode = XMLDocument::child(node, "Envelope");
-    if (!envelopeNode) {
-        envelopeNode = node;
-    }
-    
+
     std::string lowerCornerStr = getChildText(envelopeNode, "lowerCorner");
     if (lowerCornerStr.empty()) {
         lowerCornerStr = getChildText(envelopeNode, "gml:lowerCorner");
     }
     auto lowerCorner = parsePosList(lowerCornerStr, srsDimension);
-    
+
     std::string upperCornerStr = getChildText(envelopeNode, "upperCorner");
     if (upperCornerStr.empty()) {
         upperCornerStr = getChildText(envelopeNode, "gml:upperCorner");
     }
     auto upperCorner = parsePosList(upperCornerStr, srsDimension);
-    
-    if (lowerCorner.size() < 2 || upperCorner.size() < 2) {
+
+    if (lowerCorner.empty() || upperCorner.empty()) {
         return nullptr;
     }
-    
+
     return Envelope::create(
         lowerCorner[0].x(), lowerCorner[0].y(), lowerCorner[0].z(),
         upperCorner[0].x(), upperCorner[0].y(), upperCorner[0].z(),
