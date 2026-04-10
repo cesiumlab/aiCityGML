@@ -159,7 +159,9 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
                     std::string id = stripFragment(targetId);
                     auto it = polygonMap.find(id);
                     if (it != polygonMap.end()) {
-                        it->second->setAppearance(mat);
+                        if (!it->second->getMaterial())
+                            it->second->setAppearance(mat);
+                        break;
                     }
                 }
             } else if (auto tex = std::dynamic_pointer_cast<citygml::ParameterizedTexture>(sd)) {
@@ -167,7 +169,9 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
                     std::string id = stripFragment(target.uri);
                     auto it = polygonMap.find(id);
                     if (it != polygonMap.end()) {
-                        it->second->setAppearance(tex);
+                        if (!it->second->getTexture())
+                            it->second->setAppearance(tex);
+                        break;
                     }
                 }
             }

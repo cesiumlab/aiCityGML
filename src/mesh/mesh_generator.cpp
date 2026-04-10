@@ -573,9 +573,14 @@ MeshGenerator::collectTextureCoords(const Polygon& polygon,
     const std::string& polyId = polygon.getId();
     if (polyId.empty()) return result;
 
+    // Get exterior ring ID for matching with textureCoordinates@ring attribute.
+    std::string exteriorRingId;
+    if (auto ring = polygon.getExteriorRing()) {
+        exteriorRingId = ring->getId();
+    }
+
     const auto& targets = tex.getTargets();
     for (const auto& target : targets) {
-        // target.uri is an XLink like "#ringID" — strip leading '#'
         std::string targetId = target.uri;
         if (!targetId.empty() && targetId[0] == '#') {
             targetId = targetId.substr(1);
@@ -583,7 +588,10 @@ MeshGenerator::collectTextureCoords(const Polygon& polygon,
         if (targetId != polyId) continue;
 
         for (const auto& tc : target.textureCoords) {
-            if (tc.ringId != polyId) continue;
+            // tc.ringId has '#' prefix from XML attribute; strip it for comparison.
+            std::string ringId = tc.ringId;
+            if (!ringId.empty() && ringId[0] == '#') ringId = ringId.substr(1);
+            if (ringId != exteriorRingId) continue;
             if (tc.coordinates.empty()) continue;
 
             TextureCoordinates2D entry;
