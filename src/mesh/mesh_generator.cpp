@@ -559,8 +559,11 @@ Material MeshGenerator::fromX3DMaterial(const X3DMaterial& mat) {
 
 Material MeshGenerator::fromParameterizedTexture(const ParameterizedTexture& tex) {
     Material m;
-    m.name = "ParameterizedTexture";
-    m.textureURI = tex.getImageURI();
+    // Use texture filename as material name so different textures get unique MTL names.
+    std::string uri = tex.getImageURI();
+    size_t pos = uri.rfind('/');
+    m.name = (pos == std::string::npos) ? uri : uri.substr(pos + 1);
+    m.textureURI = uri;
     m.mimeType = tex.getMimeType();
     return m;
 }
