@@ -20,6 +20,16 @@ public:
     virtual ~AbstractGeometry() = default;
     virtual GeometryType getType() const = 0;
     virtual bool isEmpty() const = 0;
+
+    const std::string& getSrsName() const { return srsName_; }
+    void setSrsName(const std::string& name) { srsName_ = name; }
+
+    int getSrsDimension() const { return srsDimension_; }
+    void setSrsDimension(int dim) { srsDimension_ = dim; }
+
+protected:
+    std::string srsName_;
+    int srsDimension_ = 3;
 };
 
 using AbstractGeometryPtr = std::shared_ptr<AbstractGeometry>;

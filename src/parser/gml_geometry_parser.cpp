@@ -13,31 +13,45 @@ GMLGeometryParser::~GMLGeometryParser() = default;
 
 std::shared_ptr<AbstractGeometry> GMLGeometryParser::parseGeometry(void* node) {
     if (!node) return nullptr;
-    
+
     std::string name = XMLDocument::nodeName(node);
-    
+
+    std::shared_ptr<AbstractGeometry> geom;
     if (name == "Point" || name == "gml:Point") {
-        return parsePoint(node);
+        geom = parsePoint(node);
     }
     else if (name == "MultiPoint" || name == "gml:MultiPoint") {
-        return parseMultiPoint(node);
+        geom = parseMultiPoint(node);
     }
     else if (name == "MultiCurve" || name == "gml:MultiCurve") {
-        return parseMultiCurve(node);
+        geom = parseMultiCurve(node);
     }
     else if (name == "MultiSurface" || name == "gml:MultiSurface" ||
              name == "CompositeSurface" || name == "gml:CompositeSurface") {
-        return parseMultiSurface(node);
+        geom = parseMultiSurface(node);
     }
     else if (name == "Solid" || name == "gml:Solid" ||
              name == "CompositeSolid" || name == "gml:CompositeSolid") {
-        return parseSolid(node);
+        geom = parseSolid(node);
     }
     else if (name == "Polygon" || name == "gml:Polygon") {
-        return parsePolygon(node);
+        geom = parsePolygon(node);
     }
-    
-    return nullptr;
+
+    if (geom) {
+        std::string srs = XMLDocument::attribute(node, "srsName");
+        if (!srs.empty()) {
+            geom->setSrsName(srs);
+            std::string dimStr = XMLDocument::attribute(node, "srsDimension");
+            if (!dimStr.empty()) {
+                try {
+                    geom->setSrsDimension(std::stoi(dimStr));
+                } catch (...) {}
+            }
+        }
+    }
+
+    return geom;
 }
 
 std::shared_ptr<Point> GMLGeometryParser::parsePoint(void* node) {

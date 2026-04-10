@@ -18,11 +18,15 @@ void printGeometry(std::shared_ptr<AbstractGeometry> geom, int indent = 2) {
         std::cout << "  (null geometry)" << std::endl;
         return;
     }
-    
+
     std::string prefix(indent, ' ');
-    
+
     GeometryType type = geom->getType();
-    
+
+    if (!geom->getSrsName().empty()) {
+        std::cout << prefix << "SRS: " << geom->getSrsName() << std::endl;
+    }
+
     switch (type) {
         case GeometryType::GT_MultiSurface:
         case GeometryType::GT_CompositeSurface: {
