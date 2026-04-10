@@ -8,7 +8,7 @@
 namespace citygml {
 
 class ParserContext;
-class Envelope;
+struct Envelope;
 class Point;
 class AbstractGeometry;
 class Polygon;

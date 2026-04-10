@@ -3,6 +3,7 @@
 #include "citygml/core/citygml_feature.h"
 #include "citygml/core/citygml_geometry.h"
 #include <optional>
+#include <string>
 
 namespace citygml {
 
@@ -96,4 +97,4 @@ public:
     virtual ~AbstractUnoccupiedSpace() = default;
 };
 
-}
+} // namespace citygml

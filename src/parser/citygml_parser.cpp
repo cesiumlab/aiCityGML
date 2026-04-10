@@ -4,6 +4,10 @@
 #include "citygml/parser/citygml_reader.h"
 #include "citygml/parser/gml_envelope_parser.h"
 #include "citygml/core/citygml_appearance.h"
+#include "citygml/core/citygml_geometry.h"
+
+#include <map>
+#include <set>
 
 namespace citygml {
 
@@ -20,22 +24,22 @@ ParseResult CityGMLParser::parse(const std::string& filePath, std::shared_ptr<Ci
     if (filePath.empty()) {
         return ParseResult::error("Empty file path");
     }
-    
+
     XMLDocument doc;
     if (!doc.loadFile(filePath.c_str())) {
         return ParseResult::error(std::string("XML parse failed: ") + doc.errorStr());
     }
-    
+
     void* root = doc.root();
     if (!root) {
         return ParseResult::error("No root node");
     }
-    
+
     auto result = initializeParser(filePath);
     if (!result.success) {
         return result;
     }
-    
+
     return parseCityModelNode(root, cityModel);
 }
 
@@ -43,21 +47,21 @@ ParseResult CityGMLParser::parseString(const std::string& xmlContent, std::share
     if (xmlContent.empty()) {
         return ParseResult::error("Empty XML content");
     }
-    
+
     XMLDocument doc;
     if (!doc.parse(xmlContent.c_str())) {
         return ParseResult::error(std::string("XML parse failed: ") + doc.errorStr());
     }
-    
+
     void* root = doc.root();
     if (!root) {
         return ParseResult::error("No root node");
     }
-    
+
     context_ = std::make_shared<ParserContext>();
     geometryParser_ = std::make_shared<GMLGeometryParser>(context_);
     cityGMLReader_ = std::make_shared<CityGMLReader>(context_, geometryParser_);
-    
+
     return parseCityModelNode(root, cityModel);
 }
 
@@ -65,20 +69,18 @@ ParseResult CityGMLParser::initializeParser(const std::string& filePath) {
     context_ = std::make_shared<ParserContext>();
     geometryParser_ = std::make_shared<GMLGeometryParser>(context_);
     cityGMLReader_ = std::make_shared<CityGMLReader>(context_, geometryParser_);
-    
+
     return ParseResult::successResult();
 }
 
 ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityModel>& cityModel) {
     cityModel = std::make_shared<CityModel>();
 
-    // 解析 ID (gml:id)
     std::string gmlId = XMLDocument::attribute(node, "gml:id");
     if (!gmlId.empty()) {
         cityModel->setId(gmlId);
     }
 
-    // 解析名称 (gml:name)
     void* nameNode = XMLDocument::child(node, "name");
     if (!nameNode) nameNode = XMLDocument::child(node, "gml:name");
     if (nameNode) {
@@ -86,12 +88,8 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
     }
 
     void* boundedBy = XMLDocument::child(node, "boundedBy");
-    if (!boundedBy) {
-        boundedBy = XMLDocument::child(node, "gml:boundedBy");
-    }
-    if (!boundedBy) {
-        boundedBy = XMLDocument::child(node, "core:boundedBy");
-    }
+    if (!boundedBy) boundedBy = XMLDocument::child(node, "gml:boundedBy");
+    if (!boundedBy) boundedBy = XMLDocument::child(node, "core:boundedBy");
 
     if (boundedBy) {
         GMLEnvelopeParser envelopeParser;
@@ -101,7 +99,6 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
         }
     }
 
-    // 解析 app:appearanceMember
     std::vector<void*> appearanceMembers = XMLDocument::children(node, "appearanceMember");
     if (appearanceMembers.empty()) {
         appearanceMembers = XMLDocument::children(node, "app:appearanceMember");
@@ -133,7 +130,71 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
         }
     }
 
+    // Step 2: Build polygon ID map for bidirectional association
+    std::map<std::string, std::shared_ptr<citygml::Polygon>> polygonMap;
+    for (const auto& cityObj : cityModel->getCityObjects()) {
+        for (int lod = 0; lod <= 4; ++lod) {
+            auto geom = cityObj->getLODGeometry(lod);
+            if (!geom) continue;
+            collectPolygons(geom, polygonMap);
+        }
+    }
+
+    // Step 3: Set appearance data for each polygon based on gml:id matching
+    for (const auto& appearance : cityModel->getAppearances()) {
+        for (const auto& sd : appearance->getSurfaceData()) {
+            if (auto mat = std::dynamic_pointer_cast<citygml::X3DMaterial>(sd)) {
+                for (const std::string& targetId : mat->getTargets()) {
+                    std::string id = stripFragment(targetId);
+                    auto it = polygonMap.find(id);
+                    if (it != polygonMap.end()) {
+                        it->second->setAppearance(mat);
+                    }
+                }
+            } else if (auto tex = std::dynamic_pointer_cast<citygml::ParameterizedTexture>(sd)) {
+                for (const auto& target : tex->getTargets()) {
+                    std::string id = stripFragment(target.uri);
+                    auto it = polygonMap.find(id);
+                    if (it != polygonMap.end()) {
+                        it->second->setAppearance(tex);
+                    }
+                }
+            }
+        }
+    }
+
     return ParseResult::successResult();
+}
+
+void CityGMLParser::collectPolygons(
+    std::shared_ptr<citygml::AbstractGeometry> geom,
+    std::map<std::string, std::shared_ptr<citygml::Polygon>>& polygonMap) {
+    if (!geom) return;
+
+    if (auto polygon = std::dynamic_pointer_cast<citygml::Polygon>(geom)) {
+        std::string pid = polygon->getId();
+        if (!pid.empty()) polygonMap[pid] = polygon;
+    } else if (auto ms = std::dynamic_pointer_cast<citygml::MultiSurface>(geom)) {
+        for (size_t i = 0; i < ms->getGeometriesCount(); ++i) {
+            collectPolygons(ms->getGeometry(i), polygonMap);
+        }
+    } else if (auto solid = std::dynamic_pointer_cast<citygml::Solid>(geom)) {
+        if (auto shell = solid->getOuterShell()) {
+            collectPolygons(shell, polygonMap);
+        }
+    } else if (auto multiSolid = std::dynamic_pointer_cast<citygml::MultiSolid>(geom)) {
+        for (size_t i = 0; i < multiSolid->getGeometriesCount(); ++i) {
+            collectPolygons(multiSolid->getGeometry(i), polygonMap);
+        }
+    }
+}
+
+std::string CityGMLParser::stripFragment(const std::string& uri) const {
+    size_t pos = uri.find('#');
+    if (pos != std::string::npos) {
+        return uri.substr(pos + 1);
+    }
+    return uri;
 }
 
 AppearancePtr CityGMLParser::parseAppearance(void* node) {
@@ -147,8 +208,7 @@ AppearancePtr CityGMLParser::parseAppearance(void* node) {
     void* themeNode = XMLDocument::child(node, "theme");
     if (!themeNode) themeNode = XMLDocument::child(node, "app:theme");
     if (themeNode) {
-        std::string theme = XMLDocument::text(themeNode);
-        appearance->setTheme(theme);
+        appearance->setTheme(XMLDocument::text(themeNode));
     }
 
     std::vector<void*> surfaceDataMembers = XMLDocument::children(node, "surfaceDataMember");
@@ -163,15 +223,11 @@ AppearancePtr CityGMLParser::parseAppearance(void* node) {
         std::string sdName = XMLDocument::nodeName(sdNode);
         if (sdName == "X3DMaterial" || sdName == "app:X3DMaterial") {
             auto material = parseX3DMaterial(sdNode);
-            if (material) {
-                appearance->addSurfaceData(material);
-            }
+            if (material) appearance->addSurfaceData(material);
         }
         else if (sdName == "ParameterizedTexture" || sdName == "app:ParameterizedTexture") {
             auto texture = parseParameterizedTexture(sdNode);
-            if (texture) {
-                appearance->addSurfaceData(texture);
-            }
+            if (texture) appearance->addSurfaceData(texture);
         }
     }
 
@@ -187,14 +243,10 @@ X3DMaterialPtr CityGMLParser::parseX3DMaterial(void* node) {
     }
 
     auto targetNodes = XMLDocument::children(node, "target");
-    if (targetNodes.empty()) {
-        targetNodes = XMLDocument::children(node, "app:target");
-    }
+    if (targetNodes.empty()) targetNodes = XMLDocument::children(node, "app:target");
     for (void* targetNode : targetNodes) {
         std::string target = XMLDocument::text(targetNode);
-        if (!target.empty()) {
-            material->addTarget(target);
-        }
+        if (!target.empty()) material->addTarget(target);
     }
 
     void* diffuseNode = XMLDocument::child(node, "diffuseColor");
@@ -228,17 +280,13 @@ X3DMaterialPtr CityGMLParser::parseX3DMaterial(void* node) {
     void* transNode = XMLDocument::child(node, "transparency");
     if (!transNode) transNode = XMLDocument::child(node, "app:transparency");
     if (transNode) {
-        try {
-            material->setTransparency(std::stod(XMLDocument::text(transNode)));
-        } catch (...) {}
+        try { material->setTransparency(std::stod(XMLDocument::text(transNode))); } catch (...) {}
     }
 
     void* shineNode = XMLDocument::child(node, "shininess");
     if (!shineNode) shineNode = XMLDocument::child(node, "app:shininess");
     if (shineNode) {
-        try {
-            material->setShininess(std::stod(XMLDocument::text(shineNode)));
-        } catch (...) {}
+        try { material->setShininess(std::stod(XMLDocument::text(shineNode))); } catch (...) {}
     }
 
     void* smoothNode = XMLDocument::child(node, "isSmooth");
@@ -272,29 +320,21 @@ ParameterizedTexturePtr CityGMLParser::parseParameterizedTexture(void* node) {
     }
 
     auto targetNodes = XMLDocument::children(node, "target");
-    if (targetNodes.empty()) {
-        targetNodes = XMLDocument::children(node, "app:target");
-    }
+    if (targetNodes.empty()) targetNodes = XMLDocument::children(node, "app:target");
     for (void* targetNode : targetNodes) {
         ParameterizedTexture::TextureTarget target;
         std::string uriAttr = XMLDocument::attribute(targetNode, "uri");
-        if (uriAttr.empty()) {
-            uriAttr = XMLDocument::attribute(targetNode, "xlink:href");
-        }
+        if (uriAttr.empty()) uriAttr = XMLDocument::attribute(targetNode, "xlink:href");
         target.uri = uriAttr;
 
         void* texCoordList = XMLDocument::child(targetNode, "TexCoordList");
         if (!texCoordList) texCoordList = XMLDocument::child(targetNode, "app:TexCoordList");
         if (texCoordList) {
             auto texCoordNodes = XMLDocument::children(texCoordList, "textureCoordinates");
-            if (texCoordNodes.empty()) {
-                texCoordNodes = XMLDocument::children(texCoordList, "app:textureCoordinates");
-            }
+            if (texCoordNodes.empty()) texCoordNodes = XMLDocument::children(texCoordList, "app:textureCoordinates");
             for (void* tcNode : texCoordNodes) {
                 std::string ringIdAttr = XMLDocument::attribute(tcNode, "ring");
-                if (ringIdAttr.empty()) {
-                    ringIdAttr = XMLDocument::attribute(tcNode, "app:ring");
-                }
+                if (ringIdAttr.empty()) ringIdAttr = XMLDocument::attribute(tcNode, "app:ring");
 
                 TextureCoordinates tc;
                 tc.ringId = ringIdAttr;
