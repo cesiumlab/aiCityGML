@@ -23,10 +23,9 @@ std::shared_ptr<CityModel> CityGMLReader::readCityModel(void* node) {
     
     auto cityModel = std::make_shared<CityModel>();
     
+    // 尝试多种可能的 boundedBy 名称
     void* boundedBy = XMLDocument::child(node, "boundedBy");
-    if (!boundedBy) {
-        boundedBy = XMLDocument::child(node, "gml:boundedBy");
-    }
+    if (!boundedBy) boundedBy = XMLDocument::child(node, "gml:boundedBy");
     if (boundedBy) {
         GMLEnvelopeParser envelopeParser;
         auto envelope = envelopeParser.parse(boundedBy, context_);
@@ -35,11 +34,20 @@ std::shared_ptr<CityModel> CityGMLReader::readCityModel(void* node) {
         }
     }
     
-    auto members = XMLDocument::children(node, "cityObjectMember");
+    // 解析 cityObjectMember
+    std::vector<void*> members = XMLDocument::children(node, "cityObjectMember");
+    if (members.empty()) {
+        members = XMLDocument::children(node, "core:cityObjectMember");
+    }
+    
     for (void* member : members) {
-        auto cityObject = readCityObject(member);
-        if (cityObject) {
-            cityModel->addCityObject(cityObject);
+        // 获取 cityObjectMember 的第一个子元素（Building 等）
+        void* cityObjectNode = XMLDocument::firstChildElement(member);
+        if (cityObjectNode) {
+            auto cityObject = readCityObject(cityObjectNode);
+            if (cityObject) {
+                cityModel->addCityObject(cityObject);
+            }
         }
     }
     
@@ -51,19 +59,15 @@ std::shared_ptr<CityObject> CityGMLReader::readCityObject(void* node) {
     
     std::string nodeName = getLocalName(node);
     
-    if (nodeName == "Building" || nodeName == "bldg:Building") {
+    // 根据类型创建对象
+    if (nodeName == "Building") {
         return readBuilding(node);
     }
     
     auto cityObject = std::make_shared<CityObject>(nodeName);
     
     parseNameAndDescription(node, cityObject);
-    
-    auto boundedBy = parseBoundedBy(node);
-    if (boundedBy) {
-        cityObject->setEnvelope(*boundedBy);
-    }
-    
+    parseBoundedBy(node, cityObject);
     parseLODGeometries(node, cityObject);
     
     return cityObject;
@@ -73,57 +77,48 @@ std::shared_ptr<CityObject> CityGMLReader::readBuilding(void* node) {
     auto building = std::make_shared<CityObject>("Building");
     
     parseNameAndDescription(node, building);
-    
-    auto boundedBy = parseBoundedBy(node);
-    if (boundedBy) {
-        building->setEnvelope(*boundedBy);
-    }
-    
+    parseBoundedBy(node, building);
     parseLODGeometries(node, building);
     
     return building;
 }
 
-std::shared_ptr<Envelope> CityGMLReader::parseBoundedBy(void* node) {
+void CityGMLReader::parseBoundedBy(void* node, std::shared_ptr<CityObject> obj) {
     void* boundedBy = XMLDocument::child(node, "boundedBy");
-    if (!boundedBy) {
-        boundedBy = XMLDocument::child(node, "gml:boundedBy");
-    }
-    if (!boundedBy) return nullptr;
+    if (!boundedBy) boundedBy = XMLDocument::child(node, "gml:boundedBy");
+    if (!boundedBy) return;
     
     GMLEnvelopeParser parser;
-    return parser.parse(boundedBy, context_);
+    auto envelope = parser.parse(boundedBy, context_);
+    if (envelope) {
+        obj->setEnvelope(*envelope);
+    }
 }
 
 void CityGMLReader::parseNameAndDescription(void* node, std::shared_ptr<CityObject> obj) {
     void* nameNode = XMLDocument::child(node, "name");
-    if (!nameNode) {
-        nameNode = XMLDocument::child(node, "gml:name");
-    }
+    if (!nameNode) nameNode = XMLDocument::child(node, "gml:name");
     if (nameNode) {
-        std::string name = XMLDocument::text(nameNode);
-        obj->setName(name);
+        obj->setName(XMLDocument::text(nameNode));
     }
     
     void* descNode = XMLDocument::child(node, "description");
-    if (!descNode) {
-        descNode = XMLDocument::child(node, "gml:description");
-    }
+    if (!descNode) descNode = XMLDocument::child(node, "gml:description");
     if (descNode) {
-        std::string desc = XMLDocument::text(descNode);
-        obj->setDescription(desc);
+        obj->setDescription(XMLDocument::text(descNode));
     }
 }
 
 void CityGMLReader::parseLODGeometries(void* node, std::shared_ptr<CityObject> obj) {
     for (int lod = 1; lod <= 4; ++lod) {
-        std::string lodSurfaceName = "lod" + std::to_string(lod) + "MultiSurface";
-        void* lodSurface = XMLDocument::child(node, lodSurfaceName);
-        if (!lodSurface) {
-            lodSurface = XMLDocument::child(node, "bldg:" + lodSurfaceName);
-        }
-        if (lodSurface) {
-            void* geometryNode = XMLDocument::firstChildElement(lodSurface);
+        // 查找 MultiSurface
+        std::string lodSurfaceName1 = "lod" + std::to_string(lod) + "MultiSurface";
+        std::string lodSurfaceName2 = "bldg:lod" + std::to_string(lod) + "MultiSurface";
+
+        void* lodGeom = XMLDocument::child(node, lodSurfaceName1);
+        if (!lodGeom) lodGeom = XMLDocument::child(node, lodSurfaceName2);
+        if (lodGeom) {
+            void* geometryNode = XMLDocument::firstChildElement(lodGeom);
             if (geometryNode) {
                 auto geometry = geometryParser_->parseGeometry(geometryNode);
                 if (geometry) {
@@ -131,14 +126,15 @@ void CityGMLReader::parseLODGeometries(void* node, std::shared_ptr<CityObject> o
                 }
             }
         }
-        
-        std::string lodSolidName = "lod" + std::to_string(lod) + "Solid";
-        void* lodSolid = XMLDocument::child(node, lodSolidName);
-        if (!lodSolid) {
-            lodSolid = XMLDocument::child(node, "bldg:" + lodSolidName);
-        }
-        if (lodSolid) {
-            void* geometryNode = XMLDocument::firstChildElement(lodSolid);
+
+        // 查找 Solid
+        std::string lodSolidName1 = "lod" + std::to_string(lod) + "Solid";
+        std::string lodSolidName2 = "bldg:lod" + std::to_string(lod) + "Solid";
+
+        lodGeom = XMLDocument::child(node, lodSolidName1);
+        if (!lodGeom) lodGeom = XMLDocument::child(node, lodSolidName2);
+        if (lodGeom) {
+            void* geometryNode = XMLDocument::firstChildElement(lodGeom);
             if (geometryNode) {
                 auto geometry = geometryParser_->parseGeometry(geometryNode);
                 if (geometry) {

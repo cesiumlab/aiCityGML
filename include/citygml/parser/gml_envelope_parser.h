@@ -6,7 +6,7 @@
 
 namespace citygml {
 
-class Envelope;
+struct Envelope;
 class Point;
 class ParserContext;
 

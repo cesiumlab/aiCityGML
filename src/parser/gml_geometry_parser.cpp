@@ -16,22 +16,24 @@ std::shared_ptr<AbstractGeometry> GMLGeometryParser::parseGeometry(void* node) {
     
     std::string name = XMLDocument::nodeName(node);
     
-    if (name == "Point") {
+    if (name == "Point" || name == "gml:Point") {
         return parsePoint(node);
     }
-    else if (name == "MultiPoint") {
+    else if (name == "MultiPoint" || name == "gml:MultiPoint") {
         return parseMultiPoint(node);
     }
-    else if (name == "MultiCurve") {
+    else if (name == "MultiCurve" || name == "gml:MultiCurve") {
         return parseMultiCurve(node);
     }
-    else if (name == "MultiSurface" || name == "CompositeSurface") {
+    else if (name == "MultiSurface" || name == "gml:MultiSurface" ||
+             name == "CompositeSurface" || name == "gml:CompositeSurface") {
         return parseMultiSurface(node);
     }
-    else if (name == "Solid" || name == "CompositeSolid") {
+    else if (name == "Solid" || name == "gml:Solid" ||
+             name == "CompositeSolid" || name == "gml:CompositeSolid") {
         return parseSolid(node);
     }
-    else if (name == "Polygon") {
+    else if (name == "Polygon" || name == "gml:Polygon") {
         return parsePolygon(node);
     }
     
@@ -121,7 +123,7 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
     auto multiSurface = std::make_shared<MultiSurface>();
     std::string nodeName = XMLDocument::nodeName(node);
     
-    if (nodeName == "CompositeSurface") {
+    if (nodeName == "CompositeSurface" || nodeName == "gml:CompositeSurface") {
         multiSurface->setType(GeometryType::GT_CompositeSurface);
     }
     
@@ -130,13 +132,14 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
         void* surfaceNode = XMLDocument::firstChildElement(member);
         if (surfaceNode) {
             std::string type = XMLDocument::nodeName(surfaceNode);
-            if (type == "Polygon") {
+            if (type == "Polygon" || type == "gml:Polygon") {
                 auto polygon = parsePolygon(surfaceNode);
                 if (polygon) {
                     multiSurface->addGeometry(polygon);
                 }
             }
-            else if (type == "MultiSurface" || type == "CompositeSurface") {
+            else if (type == "MultiSurface" || type == "gml:MultiSurface" ||
+                     type == "CompositeSurface" || type == "gml:CompositeSurface") {
                 auto childSurface = parseMultiSurface(surfaceNode);
                 if (childSurface) {
                     for (size_t i = 0; i < childSurface->getGeometriesCount(); ++i) {
@@ -151,6 +154,7 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
     }
     
     void* surfaceMembers = XMLDocument::child(node, "surfaceMembers");
+    if (!surfaceMembers) surfaceMembers = XMLDocument::child(node, "gml:surfaceMembers");
     if (surfaceMembers) {
         auto polygons = XMLDocument::children(surfaceMembers, "Polygon");
         for (void* polygonNode : polygons) {
@@ -171,29 +175,23 @@ std::shared_ptr<Solid> GMLGeometryParser::parseSolid(void* node) {
     std::string nodeName = XMLDocument::nodeName(node);
     
     void* exterior = XMLDocument::child(node, "exterior");
-    if (!exterior) {
-        exterior = XMLDocument::child(node, "gml:exterior");
-    }
+    if (!exterior) exterior = XMLDocument::child(node, "gml:exterior");
     if (exterior) {
         void* surfaceNode = XMLDocument::firstChildElement(exterior);
         if (surfaceNode) {
             std::string type = XMLDocument::nodeName(surfaceNode);
-            if (type == "CompositeSurface") {
+            if (type == "CompositeSurface" || type == "gml:CompositeSurface") {
                 auto composite = parseMultiSurface(surfaceNode);
-                if (composite) {
-                    solid->setOuterShell(composite);
-                }
+                if (composite) solid->setOuterShell(composite);
             }
-            else if (type == "MultiSurface") {
+            else if (type == "MultiSurface" || type == "gml:MultiSurface") {
                 auto multiSurface = parseMultiSurface(surfaceNode);
-                if (multiSurface) {
-                    solid->setOuterShell(multiSurface);
-                }
+                if (multiSurface) solid->setOuterShell(multiSurface);
             }
         }
     }
     
-    if (nodeName == "CompositeSolid") {
+    if (nodeName == "CompositeSolid" || nodeName == "gml:CompositeSolid") {
         solid->setType(GeometryType::GT_CompositeSolid);
     }
     
@@ -209,26 +207,27 @@ std::shared_ptr<Polygon> GMLGeometryParser::parsePolygon(void* node) {
     polygon->setId(id);
     
     void* exterior = XMLDocument::child(node, "exterior");
-    if (!exterior) {
-        exterior = XMLDocument::child(node, "gml:exterior");
-    }
+    if (!exterior) exterior = XMLDocument::child(node, "gml:exterior");
     if (exterior) {
         void* ringNode = XMLDocument::firstChildElement(exterior);
-        if (ringNode && XMLDocument::nodeName(ringNode) == "LinearRing") {
-            auto ring = parseLinearRing(ringNode);
-            if (ring) {
-                polygon->setExteriorRing(ring);
+        if (ringNode) {
+            std::string ringName = XMLDocument::nodeName(ringNode);
+            if (ringName == "LinearRing" || ringName == "gml:LinearRing") {
+                auto ring = parseLinearRing(ringNode);
+                if (ring) polygon->setExteriorRing(ring);
             }
         }
     }
     
     auto interiors = XMLDocument::children(node, "interior");
+    if (interiors.empty()) interiors = XMLDocument::children(node, "gml:interior");
     for (void* interior : interiors) {
         void* ringNode = XMLDocument::firstChildElement(interior);
-        if (ringNode && XMLDocument::nodeName(ringNode) == "LinearRing") {
-            auto ring = parseLinearRing(ringNode);
-            if (ring) {
-                polygon->addInteriorRing(ring);
+        if (ringNode) {
+            std::string ringName = XMLDocument::nodeName(ringNode);
+            if (ringName == "LinearRing" || ringName == "gml:LinearRing") {
+                auto ring = parseLinearRing(ringNode);
+                if (ring) polygon->addInteriorRing(ring);
             }
         }
     }

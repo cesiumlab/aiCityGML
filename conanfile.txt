@@ -1,0 +1,8 @@
+[requires]
+cmake/3.16.0
+
+[generators]
+cmake_find_package
+cmake_paths
+
+[options]

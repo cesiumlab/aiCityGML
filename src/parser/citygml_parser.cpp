@@ -83,11 +83,18 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
         }
     }
     
-    std::vector<void*> members = XMLDocument::children(node, "cityObjectMember");
-    for (void* member : members) {
-        auto cityObject = cityGMLReader_->readCityObject(member);
-        if (cityObject) {
-            cityModel->addCityObject(cityObject);
+    std::vector<void*> memberList = XMLDocument::children(node, "cityObjectMember");
+    if (memberList.empty()) {
+        memberList = XMLDocument::children(node, "core:cityObjectMember");
+    }
+    
+    for (size_t i = 0; i < memberList.size(); ++i) {
+        void* objNode = XMLDocument::firstChildElement(memberList[i]);
+        if (objNode) {
+            auto cityObject = cityGMLReader_->readCityObject(objNode);
+            if (cityObject) {
+                cityModel->addCityObject(cityObject);
+            }
         }
     }
     

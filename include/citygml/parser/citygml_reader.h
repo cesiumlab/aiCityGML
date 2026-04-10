@@ -9,7 +9,7 @@
 namespace citygml {
 
 class ParserContext;
-class Envelope;
+struct Envelope;
 
 class CityGMLReader {
 public:
@@ -21,7 +21,7 @@ public:
     std::shared_ptr<CityModel> readCityModel(void* node);
     
 private:
-    std::shared_ptr<Envelope> parseBoundedBy(void* node);
+    void parseBoundedBy(void* node, std::shared_ptr<CityObject> obj);
     void parseNameAndDescription(void* node, std::shared_ptr<CityObject> obj);
     void parseLODGeometries(void* node, std::shared_ptr<CityObject> obj);
     std::string getLocalName(void* node);

@@ -8,18 +8,25 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# VS2019 兼容性设置
+if(MSVC_VERSION LESS 1930)
+    # 禁用某些可能导致内部编译器错误的高级优化
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:__cplusplus")
+endif()
+
 # Debug: 关闭默认的 /RTC1（与 /O2 不兼容），使用 /Od
-set(CMAKE_CXX_FLAGS_DEBUG "/MDd /W4 /Od /Ob0 /Zi /D_DEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "/MDd /W4 /Od /Ob0 /Zi /D_DEBUG /EHsc")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /RTC1-")
 
 # Release: 优化选项
-set(CMAKE_CXX_FLAGS_RELEASE "/MD /W4 /O2 /Ob2 /GL /D NDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "/MD /W4 /O2 /Ob2 /GL /D NDEBUG /EHsc")
 
 # ============================================================
 # 依赖库
 # ============================================================
 set(TINYXML2_ROOT "${CMAKE_SOURCE_DIR}/tinyxml2-master")
-set(TINYXML2_LIB  "${CMAKE_SOURCE_DIR}/tinyxml2-master/build/tinyxml2.lib")
+set(TINYXML2_LIB_DEBUG "${CMAKE_SOURCE_DIR}/tinyxml2-master/build_vs2019_debug/Debug/tinyxml2.lib")
+set(TINYXML2_LIB_RELEASE "${CMAKE_SOURCE_DIR}/tinyxml2-master/build_vs2019_release/Release/tinyxml2.lib")
 set(EARCUT_ROOT   "${CMAKE_SOURCE_DIR}/earcut.hpp-master")
 
 if(NOT EXISTS "${TINYXML2_ROOT}/tinyxml2.h")
@@ -124,7 +131,17 @@ set(ALL_SOURCES
 )
 
 add_library(citygml_obj_lib STATIC ${ALL_HEADERS} ${ALL_SOURCES})
-target_link_libraries(citygml_obj_lib PRIVATE "${TINYXML2_LIB}")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "")
+    target_link_libraries(citygml_obj_lib PRIVATE "${TINYXML2_LIB_DEBUG}")
+else()
+    target_link_libraries(citygml_obj_lib PRIVATE "${TINYXML2_LIB_RELEASE}")
+endif()
+
+# ============================================================
+# 测试程序
+# ============================================================
+add_executable(test_parser test_parser.cpp)
+target_link_libraries(test_parser PRIVATE citygml_obj_lib)
 
 # ============================================================
 # 安装规则

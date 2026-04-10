@@ -5,9 +5,21 @@
 
 namespace citygml {
 
-// ============================================================
-// XMLDocument 实现
-// ============================================================
+static std::string getLocalName(const char* name) {
+    if (!name) return "";
+    std::string fullName(name);
+    size_t pos = fullName.find(':');
+    if (pos != std::string::npos) {
+        return fullName.substr(pos + 1);
+    }
+    return fullName;
+}
+
+static bool nameMatches(const char* nodeName, const std::string& targetName) {
+    if (!nodeName) return false;
+    std::string nodeLocalName = getLocalName(nodeName);
+    return nodeLocalName == targetName;
+}
 
 struct XMLDocument::Impl {
     tinyxml2::XMLDocument doc;
@@ -47,7 +59,16 @@ const char* XMLDocument::errorStr() const {
 void* XMLDocument::child(void* node, const std::string& name) {
     if (!node) return nullptr;
     auto* elem = static_cast<tinyxml2::XMLElement*>(node);
-    return elem->FirstChildElement(name.c_str());
+    auto* child = elem->FirstChildElement(name.c_str());
+    if (child) return child;
+    child = elem->FirstChildElement();
+    while (child) {
+        if (nameMatches(child->Name(), name)) {
+            return child;
+        }
+        child = child->NextSiblingElement();
+    }
+    return nullptr;
 }
 
 std::vector<void*> XMLDocument::children(void* node, const std::string& name) {
@@ -58,6 +79,15 @@ std::vector<void*> XMLDocument::children(void* node, const std::string& name) {
          child != nullptr;
          child = child->NextSiblingElement(name.c_str())) {
         result.push_back(child);
+    }
+    if (result.empty()) {
+        for (auto* child = elem->FirstChildElement();
+             child != nullptr;
+             child = child->NextSiblingElement()) {
+            if (nameMatches(child->Name(), name)) {
+                result.push_back(child);
+            }
+        }
     }
     return result;
 }
@@ -88,7 +118,7 @@ void* XMLDocument::firstChildElement(void* node, const std::string& name) {
     if (name.empty()) {
         return elem->FirstChildElement();
     }
-    return elem->FirstChildElement(name.c_str());
+    return child(node, name);
 }
 
 void* XMLDocument::nextSiblingElement(void* node, const std::string& name) {
@@ -97,10 +127,20 @@ void* XMLDocument::nextSiblingElement(void* node, const std::string& name) {
     if (name.empty()) {
         return elem->NextSiblingElement();
     }
-    return elem->NextSiblingElement(name.c_str());
+    auto* sibling = elem->NextSiblingElement(name.c_str());
+    if (sibling) return sibling;
+    sibling = elem->NextSiblingElement();
+    while (sibling) {
+        if (nameMatches(sibling->Name(), name)) {
+            return sibling;
+        }
+        sibling = sibling->NextSiblingElement();
+    }
+    return nullptr;
 }
 
 std::string XMLDocument::attributeNS(void* node, const std::string& uri, const std::string& localName) {
+    (void)uri;
     return attribute(node, localName);
 }
 
@@ -111,4 +151,4 @@ std::string XMLDocument::getNamespace(void* node, const std::string& prefix) {
     return uriStr ? std::string(uriStr) : "";
 }
 
-} // namespace citygml
+}
