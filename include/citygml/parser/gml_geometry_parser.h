@@ -34,7 +34,13 @@ public:
     std::vector<double> parsePos(const std::string& posStr);
     std::vector<std::vector<double>> parsePosList(const std::string& posListStr, int srsDimension = 3);
     std::shared_ptr<LinearRing> parseLinearRing(void* node);
-    
+
+    // 解析 xlink:href 引用，展开 Polygon 到 MultiSurface
+    void resolveXLinkReference(void* elemNode, std::shared_ptr<MultiSurface> multiSurface);
+
+    // 注册 Polygon 节点到上下文，支持 xlink:href 引用解析
+    void registerPolygonNode(void* node, const std::string& gmlId);
+
 private:
     std::shared_ptr<Polygon> parsePolygon(void* node);
     std::shared_ptr<ImplicitGeometry> parseImplicitGeometry(void* node);

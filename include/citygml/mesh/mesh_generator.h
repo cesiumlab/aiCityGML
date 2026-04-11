@@ -81,6 +81,11 @@ public:
     void triangulateCityObject(const CityObject& obj,
                                std::vector<Mesh>& outMeshes) const;
 
+    // Triangulate ThematicSurface bounded by this CityObject (WallSurface, RoofSurface, etc.).
+    // Each ThematicSurface may have its own MultiSurface at various LOD levels.
+    void triangulateBoundedBySurfaces(const CityObject& obj,
+                                      std::vector<Mesh>& outMeshes) const;
+
     // =================================================================
     // FootPrint & RoofEdge helpers
     // These are stored as MultiSurface on the CityObject at LOD 0.

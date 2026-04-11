@@ -7,6 +7,7 @@
 #include <optional>
 #include <array>
 #include <sstream>
+#include "citygml/parser/parser_context.h"
 
 namespace citygml {
 
@@ -18,6 +19,7 @@ class X3DMaterial;
 class ParameterizedTexture;
 class AbstractGeometry;
 class Polygon;
+class ParserContext;
 
 struct ParseResult {
     bool success = false;
@@ -38,29 +40,7 @@ struct ParseOptions {
     static ParseOptions defaultOptions() { return {}; }
 };
 
-class ParserContext {
-public:
-    ParserContext();
-    ~ParserContext();
-
-    void setSrsName(const std::string& srs) { srsName_ = srs; }
-    const std::string& getSrsName() const { return srsName_; }
-
-    void pushNamespace(const std::string& prefix, const std::string& uri);
-    std::optional<std::string> getNamespaceUri(const std::string& prefix) const;
-
-    void setFeatureName(const std::string& name) { featureName_ = name; }
-    const std::string& getFeatureName() const { return featureName_; }
-
-    void addWarning(const std::string& warn) { warnings_.push_back(warn); }
-    const std::vector<std::string>& getWarnings() const { return warnings_; }
-
-private:
-    std::string srsName_;
-    std::map<std::string, std::string> namespaces_;
-    std::string featureName_;
-    std::vector<std::string> warnings_;
-};
+// 注意：ParserContext 的完整定义在 parser_context.h 中，不要在此重复定义！
 
 class CityGMLParser {
 public:

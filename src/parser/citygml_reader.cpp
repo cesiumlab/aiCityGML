@@ -60,23 +60,57 @@ std::shared_ptr<CityModel> CityGMLReader::readCityModel(void* node) {
     return cityModel;
 }
 
+// 扫描节点中的所有 Polygon 元素并注册到上下文，支持 xlink 引用解析
+// 采用迭代方式遍历，避免递归深度过大
+static void scanAndRegisterPolygons(void* node, GMLGeometryParser& parser) {
+    if (!node) return;
+
+    // 使用显式栈实现迭代遍历，避免递归栈溢出
+    std::vector<void*> stack;
+    stack.push_back(node);
+
+    while (!stack.empty()) {
+        void* current = stack.back();
+        stack.pop_back();
+
+        std::string nodeName = XMLDocument::nodeName(current);
+
+        // 如果是 Polygon，注册其 ID
+        if (nodeName == "Polygon" || nodeName == "gml:Polygon") {
+            std::string gmlId = XMLDocument::attribute(current, "gml:id");
+            if (gmlId.empty()) gmlId = XMLDocument::attribute(current, "id");
+            if (!gmlId.empty()) {
+                parser.registerPolygonNode(current, gmlId);
+            }
+        }
+
+        // 将所有子元素压入栈中
+        void* child = XMLDocument::firstChildElement(current);
+        while (child) {
+            stack.push_back(child);
+            child = XMLDocument::nextSiblingElement(child);
+        }
+    }
+}
+
 std::shared_ptr<CityObject> CityGMLReader::readCityObject(void* node) {
     if (!node) return nullptr;
-    
+
     std::string nodeName = getLocalName(node);
-    
+
     // 根据类型创建对象
     if (nodeName == "Building") {
+        scanAndRegisterPolygons(node, *geometryParser_);
         return readBuilding(node);
     }
-    
+
     auto cityObject = std::make_shared<CityObject>(nodeName);
-    
+
     parseNameAndDescription(node, cityObject);
     parseBoundedBy(node, cityObject);
     parseLODGeometries(node, cityObject);
     parseImplicitRepresentation(node, cityObject);
-    
+
     return cityObject;
 }
 
@@ -90,7 +124,6 @@ std::shared_ptr<CityObject> CityGMLReader::readBuilding(void* node) {
     }
 
     parseNameAndDescription(node, building);
-    parseBoundedBy(node, building);
     // 解析 bldg:interiorRoom
     parseInteriorRooms(node, building);
     // 解析 bldg:address
@@ -101,6 +134,7 @@ std::shared_ptr<CityObject> CityGMLReader::readBuilding(void* node) {
     parseBuildingAttributes(node, building);
     parseLODGeometries(node, building);
     parseImplicitRepresentation(node, building);
+    parseBoundedBy(node, building);
 
     return building;
 }
@@ -186,15 +220,21 @@ void CityGMLReader::parseAddresses(void* node, std::shared_ptr<CityObject> obj) 
 }
 
 void CityGMLReader::parseBoundedBy(void* node, std::shared_ptr<CityObject> obj) {
-    // 支持多种命名空间前缀
+    // 循环处理所有 boundedBy 子元素（每个 ThematicSurface 一个）
+    void* boundedBy = nullptr;
     const char* prefixes[] = {"bldg:", ""};
 
     for (const char* prefix : prefixes) {
-        void* boundedBy = XMLDocument::child(node, std::string(prefix) + "boundedBy");
-        if (boundedBy) {
-            parseBoundedByElement(boundedBy, obj);
-            break;
-        }
+        boundedBy = XMLDocument::child(node, std::string(prefix) + "boundedBy");
+        if (boundedBy) break;
+    }
+
+    while (boundedBy) {
+        parseBoundedByElement(boundedBy, obj);
+
+        // 查找下一个 boundedBy 兄弟元素（精确匹配 local name = boundedBy）
+        void* next = XMLDocument::nextSiblingElement(boundedBy, "boundedBy");
+        boundedBy = next;
     }
 }
 
@@ -227,8 +267,10 @@ void CityGMLReader::parseBoundedByElement(void* boundedByNode, std::shared_ptr<C
         surface->setDescription(XMLDocument::text(descNode));
     }
 
-    // 解析几何体（lodXMultiSurface）
-    for (int lod = 0; lod <= 4; ++lod) {
+    // 解析几何体（lodXMultiSurface），优先取最高 LOD 的非空几何
+    std::shared_ptr<MultiSurface> foundMultiSurface;
+    int foundLod = -1;
+    for (int lod = 4; lod >= 0; --lod) {
         std::string lodNames[] = {
             "lod" + std::to_string(lod) + "MultiSurface",
             "bldg:lod" + std::to_string(lod) + "MultiSurface"
@@ -241,12 +283,21 @@ void CityGMLReader::parseBoundedByElement(void* boundedByNode, std::shared_ptr<C
                 if (geometryNode) {
                     auto geometry = geometryParser_->parseGeometry(geometryNode);
                     if (geometry) {
-                        surface->setMultiSurface(std::dynamic_pointer_cast<MultiSurface>(geometry));
+                        foundMultiSurface = std::dynamic_pointer_cast<MultiSurface>(geometry);
+                        foundLod = lod;
                     }
                 }
                 break;
             }
         }
+        if (foundMultiSurface && foundMultiSurface->getGeometriesCount() > 0) {
+            break;  // 找到最高 LOD 的非空几何，停止搜索
+        }
+        foundMultiSurface.reset();  // 重置，继续找更低的 LOD
+        foundLod = -1;
+    }
+    if (foundMultiSurface && foundLod >= 0) {
+        surface->setMultiSurface(foundMultiSurface);
     }
 
     // 解析开口（bldg:opening）

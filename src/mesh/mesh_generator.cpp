@@ -389,6 +389,60 @@ void MeshGenerator::triangulateSolid(const Solid& solid,
 // ================================================================
 // CityGML object-level functions
 // ================================================================
+void MeshGenerator::triangulateBoundedBySurfaces(const CityObject& obj,
+                                                  std::vector<Mesh>& outMeshes) const {
+    const auto& surfaces = obj.getBoundedBySurfaces();
+
+    for (const auto& surface : surfaces) {
+        std::shared_ptr<MultiSurface> ms = surface->getMultiSurface();
+        if (!ms) continue;
+        if (ms->getGeometriesCount() == 0) continue;
+
+        std::string surfaceType;
+        if (std::dynamic_pointer_cast<WallSurface>(surface)) {
+            surfaceType = "WallSurface";
+        } else if (std::dynamic_pointer_cast<RoofSurface>(surface)) {
+            surfaceType = "RoofSurface";
+        } else if (std::dynamic_pointer_cast<GroundSurface>(surface)) {
+            surfaceType = "GroundSurface";
+        } else if (std::dynamic_pointer_cast<ClosureSurface>(surface)) {
+            surfaceType = "ClosureSurface";
+        } else if (std::dynamic_pointer_cast<InteriorWallSurface>(surface)) {
+            surfaceType = "InteriorWallSurface";
+        } else if (std::dynamic_pointer_cast<CeilingSurface>(surface)) {
+            surfaceType = "CeilingSurface";
+        } else if (std::dynamic_pointer_cast<FloorSurface>(surface)) {
+            surfaceType = "FloorSurface";
+        } else if (std::dynamic_pointer_cast<OuterCeilingSurface>(surface)) {
+            surfaceType = "OuterCeilingSurface";
+        } else if (std::dynamic_pointer_cast<OuterFloorSurface>(surface)) {
+            surfaceType = "OuterFloorSurface";
+        } else {
+            surfaceType = "ThematicSurface";
+        }
+
+        // WallSurface 支持处理开口（门/窗）作为布尔挖孔
+        if (options_.processOpenings && std::dynamic_pointer_cast<WallSurface>(surface)) {
+            std::vector<Mesh> wallMeshes;
+            triangulateWallSurface(*std::dynamic_pointer_cast<WallSurface>(surface), wallMeshes);
+            for (Mesh& m : wallMeshes) {
+                if (!m.isEmpty()) {
+                    m.name = surface->getId().empty() ? surfaceType : surface->getId();
+                    outMeshes.push_back(std::move(m));
+                }
+            }
+        } else {
+            // 其他表面类型：直接三角化其 MultiSurface
+            Mesh m;
+            triangulateMultiSurface(*ms, m);
+            if (!m.isEmpty()) {
+                m.name = surface->getId().empty() ? surfaceType : surface->getId();
+                outMeshes.push_back(std::move(m));
+            }
+        }
+    }
+}
+
 void MeshGenerator::triangulateCityObject(const CityObject& obj,
                                           std::vector<Mesh>& outMeshes) const {
     int lod = options_.targetLOD;
@@ -413,18 +467,18 @@ void MeshGenerator::triangulateCityObject(const CityObject& obj,
     }
 
     if (!candidates.empty()) {
-        Mesh m;
         bool first = true;
         for (auto& ms : candidates) {
             Mesh tmp;
             triangulateMultiSurface(*ms, tmp);
             if (!tmp.isEmpty()) {
                 for (SubMesh& sm : tmp.subMeshes) {
-                    outMeshes.emplace_back();
-                    outMeshes.back().name = obj.getId().empty() ? obj.getObjectType() : obj.getId();
-                    outMeshes.back().addSubMesh(sm.material).vertices = std::move(sm.vertices);
-                    outMeshes.back().subMeshes.back().triangles = std::move(sm.triangles);
-                    if (first) first = false;
+                    Mesh outMesh;
+                    outMesh.name = obj.getId().empty() ? obj.getObjectType() : obj.getId();
+                    outMesh.addSubMesh(sm.material).vertices = sm.vertices;
+                    outMesh.subMeshes.back().triangles = sm.triangles;
+                    outMeshes.push_back(std::move(outMesh));
+                    first = false;
                 }
             }
         }
@@ -473,6 +527,10 @@ void MeshGenerator::triangulateCityObject(const CityObject& obj,
             }
         }
     }
+
+    // Triangulate boundedBy ThematicSurfaces (WallSurface, RoofSurface, etc.).
+    // TODO: 暂时禁用以隔离崩溃问题
+        triangulateBoundedBySurfaces(obj, outMeshes);
 }
 
 // ================================================================
