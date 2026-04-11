@@ -18,6 +18,14 @@ void GMLGeometryParser::registerPolygonNode(void* node, const std::string& gmlId
     }
 }
 
+// 根据 gml:id 查找并解析几何节点（支持 Polygon 和 MultiSurface）
+std::shared_ptr<AbstractGeometry> GMLGeometryParser::resolveGeometryById(const std::string& id) {
+    if (id.empty()) return nullptr;
+    void* node = context_->getPolygonById(id);
+    if (!node) return nullptr;
+    return parseGeometry(node);
+}
+
 std::shared_ptr<AbstractGeometry> GMLGeometryParser::parseGeometry(void* node) {
     if (!node) return nullptr;
 

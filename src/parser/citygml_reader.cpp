@@ -2,6 +2,7 @@
 #include "citygml/parser/xml_document.h"
 #include "citygml/parser/gml_envelope_parser.h"
 #include "citygml/parser/gml_geometry_parser.h"
+#include "citygml/parser/parser_context.h"
 #include "citygml/core/citygml_object.h"
 #include "citygml/core/citygml_base.h"
 #include "citygml/core/citygml_feature.h"
@@ -75,8 +76,18 @@ static void scanAndRegisterPolygons(void* node, GMLGeometryParser& parser) {
 
         std::string nodeName = XMLDocument::nodeName(current);
 
-        // 如果是 Polygon，注册其 ID
+        // 注册 Polygon
         if (nodeName == "Polygon" || nodeName == "gml:Polygon") {
+            std::string gmlId = XMLDocument::attribute(current, "gml:id");
+            if (gmlId.empty()) gmlId = XMLDocument::attribute(current, "id");
+            if (!gmlId.empty()) {
+                parser.registerPolygonNode(current, gmlId);
+            }
+        }
+
+        // 注册 MultiSurface（支持 xlink:href 引用 MultiSurface）
+        if (nodeName == "MultiSurface" || nodeName == "gml:MultiSurface" ||
+            nodeName == "CompositeSurface" || nodeName == "gml:CompositeSurface") {
             std::string gmlId = XMLDocument::attribute(current, "gml:id");
             if (gmlId.empty()) gmlId = XMLDocument::attribute(current, "id");
             if (!gmlId.empty()) {
@@ -703,47 +714,71 @@ void CityGMLReader::parseBuildingAttributes(void* node, std::shared_ptr<CityObje
 }
 
 void CityGMLReader::parseLODGeometries(void* node, std::shared_ptr<CityObject> obj) {
+    // 辅助函数：尝试解析 lodGeom，可能内嵌几何，也可能只有 xlink:href 属性
+    auto tryParseMultiSurface = [&](void* lodGeom, std::shared_ptr<MultiSurface>& outMS) -> bool {
+        if (!lodGeom) return false;
+        void* geometryNode = XMLDocument::firstChildElement(lodGeom);
+        if (geometryNode) {
+            auto geometry = geometryParser_->parseGeometry(geometryNode);
+            if (geometry) {
+                outMS = std::dynamic_pointer_cast<MultiSurface>(geometry);
+                return outMS != nullptr;
+            }
+        } else {
+            // lodGeom 是空元素，可能只有 xlink:href 属性
+            std::string href = XMLDocument::attribute(lodGeom, "xlink_href");
+            if (href.empty()) href = XMLDocument::attribute(lodGeom, "xlink:href");
+            if (!href.empty()) {
+                if (href[0] == '#') href.erase(0, 1);
+                auto geometry = geometryParser_->resolveGeometryById(href);
+                if (geometry) {
+                    outMS = std::dynamic_pointer_cast<MultiSurface>(geometry);
+                    return outMS != nullptr;
+                }
+            }
+        }
+        return false;
+    };
+
+    auto tryParseSolid = [&](void* lodGeom, std::shared_ptr<Solid>& outSolid) -> bool {
+        if (!lodGeom) return false;
+        void* geometryNode = XMLDocument::firstChildElement(lodGeom);
+        if (geometryNode) {
+            auto geometry = geometryParser_->parseGeometry(geometryNode);
+            if (geometry) {
+                outSolid = std::dynamic_pointer_cast<Solid>(geometry);
+                return outSolid != nullptr;
+            }
+        }
+        return false;
+    };
+
     // 解析 LOD0 - 特殊处理: FootPrint, RoofEdge, MultiSurface
     // lod0FootPrint
     {
         void* lodGeom = XMLDocument::child(node, "lod0FootPrint");
         if (!lodGeom) lodGeom = XMLDocument::child(node, "bldg:lod0FootPrint");
-        if (lodGeom) {
-            void* geometryNode = XMLDocument::firstChildElement(lodGeom);
-            if (geometryNode) {
-                auto geometry = geometryParser_->parseGeometry(geometryNode);
-                if (geometry) {
-                    obj->setLod0FootPrint(std::dynamic_pointer_cast<MultiSurface>(geometry));
-                }
-            }
+        std::shared_ptr<MultiSurface> ms;
+        if (tryParseMultiSurface(lodGeom, ms)) {
+            obj->setLod0FootPrint(ms);
         }
     }
     // lod0RoofEdge
     {
         void* lodGeom = XMLDocument::child(node, "lod0RoofEdge");
         if (!lodGeom) lodGeom = XMLDocument::child(node, "bldg:lod0RoofEdge");
-        if (lodGeom) {
-            void* geometryNode = XMLDocument::firstChildElement(lodGeom);
-            if (geometryNode) {
-                auto geometry = geometryParser_->parseGeometry(geometryNode);
-                if (geometry) {
-                    obj->setLod0RoofEdge(std::dynamic_pointer_cast<MultiSurface>(geometry));
-                }
-            }
+        std::shared_ptr<MultiSurface> ms;
+        if (tryParseMultiSurface(lodGeom, ms)) {
+            obj->setLod0RoofEdge(ms);
         }
     }
     // lod0MultiSurface
     {
         void* lodGeom = XMLDocument::child(node, "lod0MultiSurface");
         if (!lodGeom) lodGeom = XMLDocument::child(node, "bldg:lod0MultiSurface");
-        if (lodGeom) {
-            void* geometryNode = XMLDocument::firstChildElement(lodGeom);
-            if (geometryNode) {
-                auto geometry = geometryParser_->parseGeometry(geometryNode);
-                if (geometry) {
-                    obj->setLod0MultiSurface(std::dynamic_pointer_cast<MultiSurface>(geometry));
-                }
-            }
+        std::shared_ptr<MultiSurface> ms;
+        if (tryParseMultiSurface(lodGeom, ms)) {
+            obj->setLod0MultiSurface(ms);
         }
     }
 
@@ -755,19 +790,13 @@ void CityGMLReader::parseLODGeometries(void* node, std::shared_ptr<CityObject> o
         void* lodGeom = XMLDocument::child(node, lodSurfaceName1);
         if (!lodGeom) lodGeom = XMLDocument::child(node, lodSurfaceName2);
 
-        if (lodGeom) {
-            void* geometryNode = XMLDocument::firstChildElement(lodGeom);
-            if (geometryNode) {
-                auto geometry = geometryParser_->parseGeometry(geometryNode);
-                if (geometry) {
-                    auto ms = std::dynamic_pointer_cast<MultiSurface>(geometry);
-                    switch (lod) {
-                        case 1: obj->setLod1MultiSurface(ms); break;
-                        case 2: obj->setLod2MultiSurface(ms); break;
-                        case 3: obj->setLod3MultiSurface(ms); break;
-                        case 4: obj->setLod4MultiSurface(ms); break;
-                    }
-                }
+        std::shared_ptr<MultiSurface> ms;
+        if (tryParseMultiSurface(lodGeom, ms)) {
+            switch (lod) {
+                case 1: obj->setLod1MultiSurface(ms); break;
+                case 2: obj->setLod2MultiSurface(ms); break;
+                case 3: obj->setLod3MultiSurface(ms); break;
+                case 4: obj->setLod4MultiSurface(ms); break;
             }
         }
     }
@@ -780,19 +809,13 @@ void CityGMLReader::parseLODGeometries(void* node, std::shared_ptr<CityObject> o
         void* lodGeom = XMLDocument::child(node, lodSolidName1);
         if (!lodGeom) lodGeom = XMLDocument::child(node, lodSolidName2);
 
-        if (lodGeom) {
-            void* geometryNode = XMLDocument::firstChildElement(lodGeom);
-            if (geometryNode) {
-                auto geometry = geometryParser_->parseGeometry(geometryNode);
-                if (geometry) {
-                    auto solid = std::dynamic_pointer_cast<Solid>(geometry);
-                    switch (lod) {
-                        case 1: obj->setLod1Solid(solid); break;
-                        case 2: obj->setLod2Solid(solid); break;
-                        case 3: obj->setLod3Solid(solid); break;
-                        case 4: obj->setLod4Solid(solid); break;
-                    }
-                }
+        std::shared_ptr<Solid> solid;
+        if (tryParseSolid(lodGeom, solid)) {
+            switch (lod) {
+                case 1: obj->setLod1Solid(solid); break;
+                case 2: obj->setLod2Solid(solid); break;
+                case 3: obj->setLod3Solid(solid); break;
+                case 4: obj->setLod4Solid(solid); break;
             }
         }
     }

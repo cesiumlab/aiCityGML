@@ -30,6 +30,7 @@ public:
     std::shared_ptr<MultiCurve> parseMultiCurve(void* node);
     std::shared_ptr<MultiSurface> parseMultiSurface(void* node);
     std::shared_ptr<Solid> parseSolid(void* node);
+    std::shared_ptr<Polygon> parsePolygon(void* node);
     
     std::vector<double> parsePos(const std::string& posStr);
     std::vector<std::vector<double>> parsePosList(const std::string& posListStr, int srsDimension = 3);
@@ -41,8 +42,10 @@ public:
     // 注册 Polygon 节点到上下文，支持 xlink:href 引用解析
     void registerPolygonNode(void* node, const std::string& gmlId);
 
+    // 根据 gml:id 查找并解析几何节点（支持 Polygon 和 MultiSurface）
+    std::shared_ptr<AbstractGeometry> resolveGeometryById(const std::string& id);
+
 private:
-    std::shared_ptr<Polygon> parsePolygon(void* node);
     std::shared_ptr<ImplicitGeometry> parseImplicitGeometry(void* node);
     
     std::shared_ptr<ParserContext> context_;
