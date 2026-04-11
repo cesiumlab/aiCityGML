@@ -183,7 +183,7 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
         multiSurface->setType(GeometryType::GT_CompositeSurface);
     }
 
-    // 统一递归处理所有 surfaceMember（支持 Polygon / MultiSurface / CompositeSurface / xlink 引用混合）
+    // 统一递归处理所有 surfaceMember（支持 Polygon / MultiSurface / CompositeSurface / Surface / xlink 引用混合）
     std::vector<void*> members = XMLDocument::children(node, "surfaceMember");
     for (void* member : members) {
         // surfaceMember 可能内嵌 Polygon，也可能本身是空元素含 xlink:href
@@ -206,8 +206,40 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
                         if (poly) multiSurface->addGeometry(poly);
                     }
                 }
+            }
+            else if (type == "Surface" || type == "gml:Surface") {
+                // 处理 gml:Surface + gml:patches + gml:PolygonPatch 结构
+                auto patches = XMLDocument::child(surfaceNode, "patches");
+                if (!patches) patches = XMLDocument::child(surfaceNode, "gml:patches");
+                if (patches) {
+                    auto polygonPatches = XMLDocument::children(patches, "PolygonPatch");
+                    for (void* patch : polygonPatches) {
+                        auto polygon = parsePolygon(patch);
+                        if (polygon) multiSurface->addGeometry(polygon);
+                    }
+                    // 尝试 gml:PolygonPatch（某些 GML 可能用全限定名）
+                    if (polygonPatches.empty()) {
+                        polygonPatches = XMLDocument::children(patches, "gml:PolygonPatch");
+                        for (void* patch : polygonPatches) {
+                            auto polygon = parsePolygon(patch);
+                            if (polygon) multiSurface->addGeometry(polygon);
+                        }
+                    }
+                }
+            }
+            else if (type == "TriangulatedSurface" || type == "gml:TriangulatedSurface") {
+                // 处理 gml:TriangulatedSurface + gml:trianglePatches
+                auto patches = XMLDocument::child(surfaceNode, "trianglePatches");
+                if (!patches) patches = XMLDocument::child(surfaceNode, "gml:trianglePatches");
+                if (patches) {
+                    auto triangles = XMLDocument::children(patches, "Triangle");
+                    for (void* tri : triangles) {
+                        auto polygon = parsePolygon(tri);
+                        if (polygon) multiSurface->addGeometry(polygon);
+                    }
+                }
             } else {
-                // 有子元素但不是 Polygon/MultiSurface：尝试解析 xlink:href 引用
+                // 有子元素但不是已知的表面类型：尝试解析 xlink:href 引用
                 resolveXLinkReference(surfaceNode, multiSurface);
             }
         } else {
@@ -225,6 +257,18 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
             auto polygon = parsePolygon(polygonNode);
             if (polygon) multiSurface->addGeometry(polygon);
         }
+        // surfaceMembers 中也可能包含 gml:Surface
+        auto surfaces = XMLDocument::children(surfaceMembers, "Surface");
+        for (void* surfaceNode : surfaces) {
+            auto patches = XMLDocument::child(surfaceNode, "patches");
+            if (patches) {
+                auto polygonPatches = XMLDocument::children(patches, "PolygonPatch");
+                for (void* patch : polygonPatches) {
+                    auto polygon = parsePolygon(patch);
+                    if (polygon) multiSurface->addGeometry(polygon);
+                }
+            }
+        }
     }
 
     return multiSurface;
@@ -232,17 +276,61 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
 
 std::shared_ptr<Solid> GMLGeometryParser::parseSolid(void* node) {
     if (!node) return nullptr;
-    
+
     auto solid = std::make_shared<Solid>();
     std::string nodeName = XMLDocument::nodeName(node);
-    
+
     void* exterior = XMLDocument::child(node, "exterior");
     if (!exterior) exterior = XMLDocument::child(node, "gml:exterior");
     if (exterior) {
         void* surfaceNode = XMLDocument::firstChildElement(exterior);
         if (surfaceNode) {
             std::string type = XMLDocument::nodeName(surfaceNode);
-            if (type == "CompositeSurface" || type == "gml:CompositeSurface") {
+
+            if (type == "Shell" || type == "gml:Shell") {
+                // gml:Shell 容器包含多个 surfaceMember
+                auto members = XMLDocument::children(surfaceNode, "surfaceMember");
+                auto multiSurface = std::make_shared<MultiSurface>();
+                for (void* member : members) {
+                    void* geomNode = XMLDocument::firstChildElement(member);
+                    if (!geomNode) {
+                        // 可能是 xlink:href
+                        resolveXLinkReference(member, multiSurface);
+                        continue;
+                    }
+                    std::string geomType = XMLDocument::nodeName(geomNode);
+                    if (geomType == "Polygon" || geomType == "gml:Polygon") {
+                        auto polygon = parsePolygon(geomNode);
+                        if (polygon) multiSurface->addGeometry(polygon);
+                    }
+                    else if (geomType == "Surface" || geomType == "gml:Surface") {
+                        auto patches = XMLDocument::child(geomNode, "patches");
+                        if (!patches) patches = XMLDocument::child(geomNode, "gml:patches");
+                        if (patches) {
+                            auto polygonPatches = XMLDocument::children(patches, "PolygonPatch");
+                            for (void* patch : polygonPatches) {
+                                auto polygon = parsePolygon(patch);
+                                if (polygon) multiSurface->addGeometry(polygon);
+                            }
+                        }
+                    }
+                    else if (geomType == "MultiSurface" || geomType == "gml:MultiSurface" ||
+                             geomType == "CompositeSurface" || geomType == "gml:CompositeSurface") {
+                        auto childMS = parseMultiSurface(geomNode);
+                        if (childMS) {
+                            for (size_t i = 0; i < childMS->getGeometriesCount(); ++i) {
+                                auto poly = childMS->getGeometry(i);
+                                if (poly) multiSurface->addGeometry(poly);
+                            }
+                        }
+                    }
+                    else {
+                        resolveXLinkReference(geomNode, multiSurface);
+                    }
+                }
+                if (!multiSurface->isEmpty()) solid->setOuterShell(multiSurface);
+            }
+            else if (type == "CompositeSurface" || type == "gml:CompositeSurface") {
                 auto composite = parseMultiSurface(surfaceNode);
                 if (composite) solid->setOuterShell(composite);
             }
@@ -250,13 +338,48 @@ std::shared_ptr<Solid> GMLGeometryParser::parseSolid(void* node) {
                 auto multiSurface = parseMultiSurface(surfaceNode);
                 if (multiSurface) solid->setOuterShell(multiSurface);
             }
+            else if (type == "Surface" || type == "gml:Surface") {
+                // 处理 gml:Surface + gml:patches + gml:PolygonPatch 结构
+                auto multiSurface = std::make_shared<MultiSurface>();
+                auto patches = XMLDocument::child(surfaceNode, "patches");
+                if (!patches) patches = XMLDocument::child(surfaceNode, "gml:patches");
+                if (patches) {
+                    auto polygonPatches = XMLDocument::children(patches, "PolygonPatch");
+                    for (void* patch : polygonPatches) {
+                        auto polygon = parsePolygon(patch);
+                        if (polygon) multiSurface->addGeometry(polygon);
+                    }
+                    if (polygonPatches.empty()) {
+                        polygonPatches = XMLDocument::children(patches, "gml:PolygonPatch");
+                        for (void* patch : polygonPatches) {
+                            auto polygon = parsePolygon(patch);
+                            if (polygon) multiSurface->addGeometry(polygon);
+                        }
+                    }
+                }
+                if (!multiSurface->isEmpty()) solid->setOuterShell(multiSurface);
+            }
+            else if (type == "TriangulatedSurface" || type == "gml:TriangulatedSurface") {
+                // 处理 gml:TriangulatedSurface + gml:trianglePatches
+                auto multiSurface = std::make_shared<MultiSurface>();
+                auto patches = XMLDocument::child(surfaceNode, "trianglePatches");
+                if (!patches) patches = XMLDocument::child(surfaceNode, "gml:trianglePatches");
+                if (patches) {
+                    auto triangles = XMLDocument::children(patches, "Triangle");
+                    for (void* tri : triangles) {
+                        auto polygon = parsePolygon(tri);
+                        if (polygon) multiSurface->addGeometry(polygon);
+                    }
+                }
+                if (!multiSurface->isEmpty()) solid->setOuterShell(multiSurface);
+            }
         }
     }
-    
+
     if (nodeName == "CompositeSolid" || nodeName == "gml:CompositeSolid") {
         solid->setType(GeometryType::GT_CompositeSolid);
     }
-    
+
     return solid;
 }
 
