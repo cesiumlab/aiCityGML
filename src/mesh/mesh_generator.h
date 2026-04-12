@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "mesh/mesh.h"
 #include "core/citygml_geometry.h"

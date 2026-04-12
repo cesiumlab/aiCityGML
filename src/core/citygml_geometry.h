@@ -1,15 +1,12 @@
-#pragma once
+﻿#pragma once
 
 #include "core/citygml_feature.h"
+#include "core/citygml_appearance.h"
 #include "core/citygml_base.h"
 #include <memory>
 #include <vector>
 
 namespace citygml {
-
-// Forward declarations
-class X3DMaterial;
-class ParameterizedTexture;
 
 // AbstractGeometry - Abstract base class for all geometry types
 class AbstractGeometry : public CityGMLObject {

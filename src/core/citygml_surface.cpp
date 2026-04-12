@@ -1,4 +1,4 @@
-#include "core/citygml_surface.h"
+﻿#include "core/citygml_surface.h"
 
 namespace citygml {
 

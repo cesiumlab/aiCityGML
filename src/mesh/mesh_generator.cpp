@@ -1,4 +1,4 @@
-#include "mesh_generator.h"
+﻿#include "mesh_generator.h"
 #include "core/citygml_appearance.h"
 #include "mesh.h"
 #include <mapbox/earcut.hpp>

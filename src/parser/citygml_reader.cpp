@@ -1,4 +1,4 @@
-#include "citygml_reader.h"
+﻿#include "citygml_reader.h"
 #include "xml_document.h"
 #include "gml_envelope_parser.h"
 #include "gml_geometry_parser.h"

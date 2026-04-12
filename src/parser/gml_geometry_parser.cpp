@@ -1,4 +1,4 @@
-#include "gml_geometry_parser.h"
+﻿#include "gml_geometry_parser.h"
 #include "xml_document.h"
 #include "parser_context.h"
 #include "core/citygml_geometry.h"

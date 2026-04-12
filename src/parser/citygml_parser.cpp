@@ -386,3 +386,29 @@ std::array<double, 4> CityGMLParser::parseColor(const std::string& colorStr) {
 }
 
 } // namespace citygml
+
+// ============================================================
+// Free function implementation - 解析 CityGML 文件
+// ============================================================
+namespace citygml {
+
+std::shared_ptr<CityModel> parseCityGML(const std::string& filePath, std::string* errorMsg) {
+    CityGMLParser parser;
+    std::shared_ptr<CityModel> cityModel;
+    ParseOptions options;
+    ParseResult result = parser.parse(filePath, cityModel, options);
+
+    if (!result.success) {
+        if (errorMsg) {
+            *errorMsg = result.errorMessage;
+        }
+        return nullptr;
+    }
+
+    if (errorMsg) {
+        errorMsg->clear();
+    }
+    return cityModel;
+}
+
+} // namespace citygml
