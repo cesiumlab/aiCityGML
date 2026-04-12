@@ -1,12 +1,14 @@
 #include "citygml/mesh/mesh_generator.h"
 #include "citygml/core/citygml_appearance.h"
 #include "citygml/mesh/mesh.h"
+#include <mapbox/earcut.hpp>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <iostream>
-#include <list>
 #include <set>
+#include <tuple>
 #include <vector>
 #include <cstdint>
 
@@ -21,105 +23,34 @@ static std::vector<Vec3> ringToVec3(const LinearRing& ring) {
     return out;
 }
 
-// ================================================================
-// Ear-clipping triangulation (VS2019 compatible, no external dependency).
-// Cross product in 2D: positive = CCW, negative = CW.
-static double cross2D(double ax, double ay, double bx, double by) {
-    return ax * by - ay * bx;
-}
+// EarcutPoint: an alias for std::array<double,2>.
+// mapbox::earcut natively supports std::array via its std::tuple_element specializations.
+using EarcutPoint = std::array<double, 2>;
 
-// Signed area of triangle (a,b,c).
-static double triangleArea2D(double ax, double ay, double bx, double by, double cx, double cy) {
-    return cross2D(bx - ax, by - ay, cx - ax, cy - ay);
-}
+} // namespace citygml
 
-// Point-in-triangle test (strictly inside, assuming CCW winding).
-// Returns true only if P is strictly inside (not on edge).
-static bool pointInTriangle2D(double ax, double ay, double bx, double by,
-                              double cx, double cy, double px, double py) {
-    double areaABC = triangleArea2D(ax, ay, bx, by, cx, cy);
-    if (std::abs(areaABC) < 1e-12) return false;
-    double areaPBC = triangleArea2D(px, py, bx, by, cx, cy);
-    double areaAPC = triangleArea2D(ax, ay, px, py, cx, cy);
-    double areaABP = triangleArea2D(ax, ay, bx, by, px, py);
-    return (areaPBC > 0) && (areaAPC > 0) && (areaABP > 0);
-}
+namespace citygml {
 
-// Ear-clipping triangulation for a simple polygon.
-// Input: 2D points in any winding order.
+// Mapbox Earcut triangulation for a simple polygon (no holes).
+// Input: 2D points (any winding order).
 // Output: N-2 triangles as flat index array.
-static std::vector<uint32_t> earClipTriangulate(const std::vector<Vec2>& pts2d) {
-    std::vector<uint32_t> result;
-    size_t n = pts2d.size();
-    if (n < 3) return result;
-
-    // Detect winding: compute signed polygon area via shoelace formula.
-    // totalArea > 0 means CCW, < 0 means CW.
-    double totalArea = 0;
-    for (size_t i = 0; i < n; ++i) {
-        const Vec2& a = pts2d[i];
-        const Vec2& b = pts2d[(i + 1) % n];
-        totalArea += a.u * b.v - b.u * a.v;
-    }
-    bool isCCW = (totalArea > 0);
-
-    std::list<uint32_t> remaining;
-    for (uint32_t i = 0; i < static_cast<uint32_t>(n); ++i) remaining.push_back(i);
-
-    while (remaining.size() > 3) {
-        bool earFound = false;
-        for (auto it = remaining.begin(); it != remaining.end(); ++it) {
-            auto prevIt = (it == remaining.begin()) ? std::prev(remaining.end()) : std::prev(it);
-            auto nextIt = std::next(it);
-            if (nextIt == remaining.end()) nextIt = remaining.begin();
-
-            uint32_t vi = *it;
-            uint32_t vp = *prevIt;
-            uint32_t vn = *nextIt;
-
-            double area = triangleArea2D(
-                pts2d[vp].u, pts2d[vp].v,
-                pts2d[vi].u, pts2d[vi].v,
-                pts2d[vn].u, pts2d[vn].v);
-
-            // CCW polygon: area>0 = convex ear. CW polygon: area<0 = convex ear.
-            bool isConvex = isCCW ? (area > 0) : (area < 0);
-            if (!isConvex) continue;
-
-            bool hasInterior = false;
-            for (uint32_t vk : remaining) {
-                if (vk == vp || vk == vi || vk == vn) continue;
-                if (vk >= static_cast<uint32_t>(n)) continue;
-                if (pointInTriangle2D(
-                        pts2d[vp].u, pts2d[vp].v,
-                        pts2d[vi].u, pts2d[vi].v,
-                        pts2d[vn].u, pts2d[vn].v,
-                        pts2d[vk].u, pts2d[vk].v)) {
-                    hasInterior = true;
-                    break;
-                }
-            }
-            if (hasInterior) continue;
-
-            result.push_back(vp);
-            result.push_back(vi);
-            result.push_back(vn);
-            auto eraseIt = it;
-            if (it == remaining.begin()) it = std::prev(remaining.end());
-            else --it;
-            remaining.erase(eraseIt);
-            earFound = true;
-            break;
-        }
-
-        if (!earFound) break;
+static std::vector<uint32_t> mapboxEarcutTriangulate(const std::vector<Vec2>& pts2d) {
+    std::vector<EarcutPoint> polygon;
+    polygon.reserve(pts2d.size());
+    for (const auto& p : pts2d) {
+        polygon.push_back({p.u, p.v});
     }
 
-    if (remaining.size() == 3) {
-        for (uint32_t idx : remaining) result.push_back(idx);
-    }
+    std::vector<std::vector<EarcutPoint>> data;
+    data.push_back(std::move(polygon));
 
-    return result;
+    std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(data);
+    return indices;
+}
+
+// Signed area of triangle (a,b,c) = cross((b-a), (c-a)).
+static double triangleArea2D(double ax, double ay, double bx, double by, double cx, double cy) {
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
 }
 
 // ================================================================
@@ -253,7 +184,7 @@ static void triangulateRing(const std::vector<Vec3>& pts,
     // (toward +z in the local frame, matching the right-hand rule convention).
     z_axis = { -z_axis.x, -z_axis.y, -z_axis.z };
 
-    std::vector<uint32_t> indices = earClipTriangulate(clean2d);
+    std::vector<uint32_t> indices = mapboxEarcutTriangulate(clean2d);
     if (indices.empty()) return;
 
     uint32_t baseIdx = static_cast<uint32_t>(outVerts.size());
@@ -356,22 +287,26 @@ void MeshGenerator::triangulateMultiSurface(const MultiSurface& ms,
             mat = fromX3DMaterial(*m);
         }
 
-        // Triangulate exterior ring.
+        // Triangulate polygon (with or without holes).
         std::vector<Vertex> verts;
         std::vector<Triangle> tris;
-        triangulateRing(ringToVec3(*exterior), uvPtr, verts, tris);
+        if (poly->getInteriorRingsCount() > 0) {
+            std::vector<LinearRingPtr> holes;
+            for (size_t r = 0; r < poly->getInteriorRingsCount(); ++r) {
+                if (auto ring = poly->getInteriorRing(r)) {
+                    holes.push_back(ring);
+                }
+            }
+            triangulatePolygonWithHoles(*poly, holes, verts, tris, mat);
+        } else {
+            triangulateRing(ringToVec3(*exterior), uvPtr, verts, tris);
+        }
 
         if (verts.empty() || tris.empty()) continue;
 
         SubMesh& sm = outMesh.addSubMesh(mat);
         sm.vertices = std::move(verts);
         sm.triangles = std::move(tris);
-
-        // Interior rings (holes) - skip for now, just emit warning.
-        if (poly->getInteriorRingsCount() > 0) {
-            std::cerr << "[MeshGenerator] Warning: interior rings not yet supported for Polygon "
-                      << poly->getId() << std::endl;
-        }
     }
 }
 
@@ -617,51 +552,32 @@ void MeshGenerator::triangulateWallSurface(const WallSurface& wall,
     }
 }
 
-// Point-in-polygon test using ray casting.
-// Returns true if point (px,py) is strictly inside the polygon.
-// polygon2d: flat array of (x,y) vertex pairs in winding order.
-static bool pointInPolygon2D(const std::vector<Vec2>& poly2d, double px, double py) {
-    size_t n = poly2d.size();
-    if (n < 3) return false;
-    bool inside = false;
-    for (size_t i = 0, j = n - 1; i < n; j = i++) {
-        double xi = poly2d[i].u, yi = poly2d[i].v;
-        double xj = poly2d[j].u, yj = poly2d[j].v;
-        bool intersect = ((yi > py) != (yj > py)) &&
-            (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
-        if (intersect) inside = !inside;
+// Signed area of polygon ring (shoelace formula).
+// Positive = CCW, Negative = CW.
+static double polygonSignedArea(const std::vector<Vec2>& ring) {
+    double area = 0;
+    size_t n = ring.size();
+    for (size_t i = 0; i < n; ++i) {
+        const Vec2& a = ring[i];
+        const Vec2& b = ring[(i + 1) % n];
+        area += a.u * b.v - b.u * a.v;
     }
-    return inside;
+    return area * 0.5;
 }
 
-// Line segment intersection test (strict: does not count touching).
-static bool segmentsIntersect2D(double ax, double ay, double bx, double by,
-                               double cx, double cy, double dx, double dy) {
-    auto orientation = [](double sx, double sy, double ex, double ey, double px, double py) {
-        return (ex - sx) * (py - sy) - (ey - sy) * (px - sx);
-    };
-    double o1 = orientation(ax, ay, bx, by, cx, cy);
-    double o2 = orientation(ax, ay, bx, by, dx, dy);
-    double o3 = orientation(cx, cy, dx, dy, ax, ay);
-    double o4 = orientation(cx, cy, dx, dy, bx, by);
-    if ((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) {
-        if ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0)) return true;
-    }
-    return false;
-}
-
-static bool edgeIntersectsHoleEdges(const Vec2& p, const Vec2& q,
-                                     const std::vector<std::vector<Vec2>>& holePoly2d) {
-    for (const auto& hp : holePoly2d) {
-        size_t nh = hp.size();
-        for (size_t j = 0; j < nh; ++j) {
-            if (segmentsIntersect2D(p.u, p.v, q.u, q.v,
-                                    hp[j].u, hp[j].v,
-                                    hp[(j+1)%nh].u, hp[(j+1)%nh].v))
-                return true;
+// Find the ring index with the largest absolute signed area.
+// Used to determine which ring is the exterior (largest) vs holes (smaller).
+static size_t findExteriorRingIndex(const std::vector<std::vector<Vec2>>& rings) {
+    size_t best = 0;
+    double bestArea = std::abs(polygonSignedArea(rings[0]));
+    for (size_t i = 1; i < rings.size(); ++i) {
+        double a = std::abs(polygonSignedArea(rings[i]));
+        if (a > bestArea) {
+            bestArea = a;
+            best = i;
         }
     }
-    return false;
+    return best;
 }
 
 void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
@@ -701,96 +617,99 @@ void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
     if (clean3d.size() < 3) return;
     z_axis = {-z_axis.x, -z_axis.y, -z_axis.z};
 
-    // Project each hole ring to 2D using the same local frame.
-    std::vector<std::vector<Vec2>> holePoly2d;
+    // Project each hole ring to 2D using the exterior's local frame.
+    // For earcut: use projected 2D (in exterior's frame).
+    // For 3D output: use the hole's ORIGINAL 3D coordinates.
+    struct HoleData {
+        std::vector<Vec3> pts3d;    // original 3D (cleaned)
+        std::vector<Vec2> pts2d;    // projected 2D in exterior's frame
+    };
+    std::vector<HoleData> holesData;
     for (const auto& hole : holes) {
         if (!hole || hole->getPointsCount() < 3) continue;
-        std::vector<Vec3> hole3d = ringToVec3(*hole);
+        std::vector<Vec3> h3d = ringToVec3(*hole);
         std::vector<Vec3> h3dClean;
-        std::vector<Vec2> h2dClean;
-        buildLocalFrame(hole3d, nullptr, origin, x_axis, y_axis, z_axis, h3dClean, h2dClean);
-        if (h2dClean.size() >= 3) {
-            holePoly2d.push_back(h2dClean);
+        std::vector<Vec2> h2d;
+        buildLocalFrame(h3d, nullptr, origin, x_axis, y_axis, z_axis, h3dClean, h2d);
+        if (h2d.size() >= 3) {
+            holesData.push_back({std::move(h3dClean), std::move(h2d)});
         }
     }
 
-    // Ear-clipping with hole constraints.
-    double totalArea = 0;
-    for (size_t i = 0; i < clean2d.size(); ++i) {
-        const Vec2& a = clean2d[i];
-        const Vec2& b = clean2d[(i + 1) % clean2d.size()];
-        totalArea += a.u * b.v - b.u * a.v;
+    // Build ring data for earcut and 3D output.
+    struct RingData {
+        std::vector<Vec2> pts2d;     // 2D for earcut
+        std::vector<Vec3> pts3d;    // 3D for vertex output
+    };
+    std::vector<RingData> allRings;
+    allRings.push_back({clean2d, clean3d});
+    for (auto& hd : holesData) {
+        allRings.push_back({hd.pts2d, hd.pts3d});
     }
-    bool exteriorCCW = (totalArea > 0);
 
-    std::list<size_t> remaining;
-    for (size_t i = 0; i < clean2d.size(); ++i) remaining.push_back(i);
+    // Find exterior ring (largest area) using 2D projected coordinates.
+    std::vector<std::vector<Vec2>> rings2d;
+    rings2d.reserve(allRings.size());
+    for (auto& r : allRings) rings2d.push_back(r.pts2d);
+    size_t exteriorIdx = findExteriorRingIndex(rings2d);
 
-    while (remaining.size() > 3) {
-        bool earFound = false;
-        for (auto it = remaining.begin(); it != remaining.end(); ++it) {
-            auto prevIt = (it == remaining.begin()) ? std::prev(remaining.end()) : std::prev(it);
-            auto nextIt = std::next(it);
-            if (nextIt == remaining.end()) nextIt = remaining.begin();
+    // Reorder so exterior ring is first.
+    if (exteriorIdx != 0) {
+        std::swap(allRings[0], allRings[exteriorIdx]);
+    }
 
-            size_t vi = *it, vp = *prevIt, vn = *nextIt;
-            double area = triangleArea2D(
-                clean2d[vp].u, clean2d[vp].v,
-                clean2d[vi].u, clean2d[vi].v,
-                clean2d[vn].u, clean2d[vn].v);
+    // Determine winding of the ring now at index 0 (the exterior).
+    double extArea = 0;
+    for (size_t i = 0; i < allRings[0].pts2d.size(); ++i) {
+        const Vec2& a = allRings[0].pts2d[i];
+        const Vec2& b = allRings[0].pts2d[(i + 1) % allRings[0].pts2d.size()];
+        extArea += a.u * b.v - b.u * a.v;
+    }
+    bool exteriorIsCCW = (extArea > 0);
 
-            bool isConvex = exteriorCCW ? (area > 0) : (area < 0);
-            if (!isConvex) continue;
+    // Convert to EarcutPoint for earcut.
+    std::vector<std::vector<EarcutPoint>> earcutData;
+    earcutData.reserve(allRings.size());
+    for (const auto& ring : allRings) {
+        std::vector<EarcutPoint> wrapped;
+        wrapped.reserve(ring.pts2d.size());
+        for (const auto& p : ring.pts2d) wrapped.push_back({p.u, p.v});
+        earcutData.push_back(std::move(wrapped));
+    }
 
-            // Check no other vertex lies inside the ear.
-            bool anyInside = false;
-            for (size_t vk : remaining) {
-                if (vk == vp || vk == vi || vk == vn) continue;
-                if (pointInTriangle2D(
-                        clean2d[vp].u, clean2d[vp].v,
-                        clean2d[vi].u, clean2d[vi].v,
-                        clean2d[vn].u, clean2d[vn].v,
-                        clean2d[vk].u, clean2d[vk].v)) {
-                    anyInside = true;
-                    break;
-                }
+    std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(earcutData);
+    if (indices.empty()) return;
+
+    // Build per-ring base index for the combined vertex array.
+    std::vector<size_t> ringBaseIdx(allRings.size(), 0);
+    for (size_t r = 1; r < allRings.size(); ++r) {
+        ringBaseIdx[r] = ringBaseIdx[r - 1] + allRings[r - 1].pts3d.size();
+    }
+
+    // Emit 3D vertices: each ring's original 3D coords + exterior's UV.
+    outVertices.reserve(ringBaseIdx.back() + allRings.back().pts3d.size());
+    for (size_t ri = 0; ri < allRings.size(); ++ri) {
+        for (size_t i = 0; i < allRings[ri].pts3d.size(); ++i) {
+            if (ri == 0) {
+                // Exterior: use 2D UV
+                outVertices.emplace_back(allRings[ri].pts3d[i], z_axis, allRings[ri].pts2d[i]);
+            } else {
+                // Hole: original 3D + 2D UV (projected onto exterior plane)
+                outVertices.emplace_back(allRings[ri].pts3d[i], z_axis, allRings[ri].pts2d[i]);
             }
-            if (anyInside) continue;
-
-            // Check ear does not cross any hole edge.
-            if (edgeIntersectsHoleEdges(clean2d[vp], clean2d[vn], holePoly2d)) continue;
-
-            // Check midpoint of the ear edge is not inside any hole.
-            double mx = (clean2d[vp].u + clean2d[vn].u) * 0.5;
-            double my = (clean2d[vp].v + clean2d[vn].v) * 0.5;
-            bool inHole = false;
-            for (const auto& hp : holePoly2d) {
-                if (pointInPolygon2D(hp, mx, my)) { inHole = true; break; }
-            }
-            if (inHole) continue;
-
-            uint32_t baseIdx = static_cast<uint32_t>(outVertices.size());
-            outVertices.emplace_back(clean3d[vp], z_axis, clean2d[vp]);
-            outVertices.emplace_back(clean3d[vi], z_axis, clean2d[vi]);
-            outVertices.emplace_back(clean3d[vn], z_axis, clean2d[vn]);
-            outTriangles.emplace_back(baseIdx, baseIdx + 1, baseIdx + 2);
-
-            auto eraseIt = it;
-            if (it == remaining.begin()) it = std::prev(remaining.end());
-            else --it;
-            remaining.erase(eraseIt);
-            earFound = true;
-            break;
         }
-        if (!earFound) break;
     }
 
-    if (remaining.size() == 3) {
-        uint32_t baseIdx = static_cast<uint32_t>(outVertices.size());
-        for (size_t idx : remaining) {
-            outVertices.emplace_back(clean3d[idx], z_axis, clean2d[idx]);
+    // Emit triangles using the correct ring base indices.
+    for (size_t i = 0; i < indices.size(); i += 3) {
+        uint32_t v0 = indices[i];
+        uint32_t v1 = indices[i + 1];
+        uint32_t v2 = indices[i + 2];
+        if (!exteriorIsCCW) {
+            outTriangles.emplace_back(v0, v2, v1);
+        } else {
+            outTriangles.emplace_back(v0, v1, v2);
         }
-        outTriangles.emplace_back(baseIdx, baseIdx + 1, baseIdx + 2);
     }
 }
 
@@ -1083,80 +1002,83 @@ void triangulateRings(const LinearRing& exterior,
     if (clean3d.size() < 3) return;
     z_axis = {-z_axis.x, -z_axis.y, -z_axis.z};
 
-    std::vector<std::vector<Vec2>> holePoly2d;
+    // For earcut: use projected 2D (in exterior's frame).
+    // For 3D output: use each ring's ORIGINAL 3D coordinates.
+    struct HoleData {
+        std::vector<Vec3> pts3d;
+        std::vector<Vec2> pts2d;
+    };
+    std::vector<HoleData> holesData;
     for (const auto& hole : holes) {
         std::vector<Vec3> h3d = ringToVec3(*hole);
         std::vector<Vec3> hc3d;
         std::vector<Vec2> hc2d;
         buildLocalFrame(h3d, nullptr, origin, x_axis, y_axis, z_axis, hc3d, hc2d);
-        if (hc2d.size() >= 3) holePoly2d.push_back(hc2d);
-    }
-
-    double totalArea = 0;
-    for (size_t i = 0; i < clean2d.size(); ++i) {
-        const Vec2& a = clean2d[i];
-        const Vec2& b = clean2d[(i + 1) % clean2d.size()];
-        totalArea += a.u * b.v - b.u * a.v;
-    }
-    bool exteriorCCW = (totalArea > 0);
-
-    std::list<size_t> remaining;
-    for (size_t i = 0; i < clean2d.size(); ++i) remaining.push_back(i);
-
-    while (remaining.size() > 3) {
-        bool earFound = false;
-        for (auto it = remaining.begin(); it != remaining.end(); ++it) {
-            auto prevIt = (it == remaining.begin()) ? std::prev(remaining.end()) : std::prev(it);
-            auto nextIt = std::next(it);
-            if (nextIt == remaining.end()) nextIt = remaining.begin();
-
-            size_t vi = *it, vp = *prevIt, vn = *nextIt;
-            double area = triangleArea2D(
-                clean2d[vp].u, clean2d[vp].v,
-                clean2d[vi].u, clean2d[vi].v,
-                clean2d[vn].u, clean2d[vn].v);
-
-            bool isConvex = exteriorCCW ? (area > 0) : (area < 0);
-            if (!isConvex) continue;
-
-            bool anyInside = false;
-            for (size_t vk : remaining) {
-                if (vk == vp || vk == vi || vk == vn) continue;
-                if (pointInTriangle2D(
-                        clean2d[vp].u, clean2d[vp].v,
-                        clean2d[vi].u, clean2d[vi].v,
-                        clean2d[vn].u, clean2d[vn].v,
-                        clean2d[vk].u, clean2d[vk].v)) {
-                    anyInside = true;
-                    break;
-                }
-            }
-            if (anyInside) continue;
-
-            if (edgeIntersectsHoleEdges(clean2d[vp], clean2d[vn], holePoly2d)) continue;
-
-            uint32_t baseIdx = static_cast<uint32_t>(outVertices.size());
-            outVertices.emplace_back(clean3d[vp], z_axis, clean2d[vp]);
-            outVertices.emplace_back(clean3d[vi], z_axis, clean2d[vi]);
-            outVertices.emplace_back(clean3d[vn], z_axis, clean2d[vn]);
-            outTriangles.emplace_back(baseIdx, baseIdx + 1, baseIdx + 2);
-
-            auto eraseIt = it;
-            if (it == remaining.begin()) it = std::prev(remaining.end());
-            else --it;
-            remaining.erase(eraseIt);
-            earFound = true;
-            break;
+        if (hc2d.size() >= 3) {
+            holesData.push_back({std::move(hc3d), std::move(hc2d)});
         }
-        if (!earFound) break;
     }
 
-    if (remaining.size() == 3) {
-        uint32_t baseIdx = static_cast<uint32_t>(outVertices.size());
-        for (size_t idx : remaining) {
-            outVertices.emplace_back(clean3d[idx], z_axis, clean2d[idx]);
+    struct RingData {
+        std::vector<Vec2> pts2d;
+        std::vector<Vec3> pts3d;
+    };
+    std::vector<RingData> allRings;
+    allRings.push_back({clean2d, clean3d});
+    for (auto& hd : holesData) {
+        allRings.push_back({hd.pts2d, hd.pts3d});
+    }
+
+    // Extract 2D rings for exterior index detection.
+    std::vector<std::vector<Vec2>> rings2d;
+    rings2d.reserve(allRings.size());
+    for (auto& r : allRings) rings2d.push_back(r.pts2d);
+    size_t exteriorIdx = findExteriorRingIndex(rings2d);
+    if (exteriorIdx != 0) {
+        std::swap(allRings[0], allRings[exteriorIdx]);
+    }
+
+    double extArea = 0;
+    for (size_t i = 0; i < allRings[0].pts2d.size(); ++i) {
+        const Vec2& a = allRings[0].pts2d[i];
+        const Vec2& b = allRings[0].pts2d[(i + 1) % allRings[0].pts2d.size()];
+        extArea += a.u * b.v - b.u * a.v;
+    }
+    bool exteriorIsCCW = (extArea > 0);
+
+    std::vector<std::vector<EarcutPoint>> earcutData;
+    earcutData.reserve(allRings.size());
+    for (const auto& ring : allRings) {
+        std::vector<EarcutPoint> wrapped;
+        wrapped.reserve(ring.pts2d.size());
+        for (const auto& p : ring.pts2d) wrapped.push_back({p.u, p.v});
+        earcutData.push_back(std::move(wrapped));
+    }
+
+    std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(earcutData);
+    if (indices.empty()) return;
+
+    std::vector<size_t> ringBaseIdx(allRings.size(), 0);
+    for (size_t r = 1; r < allRings.size(); ++r) {
+        ringBaseIdx[r] = ringBaseIdx[r - 1] + allRings[r - 1].pts3d.size();
+    }
+
+    outVertices.reserve(ringBaseIdx.back() + allRings.back().pts3d.size());
+    for (size_t ri = 0; ri < allRings.size(); ++ri) {
+        for (size_t i = 0; i < allRings[ri].pts3d.size(); ++i) {
+            outVertices.emplace_back(allRings[ri].pts3d[i], z_axis, allRings[ri].pts2d[i]);
         }
-        outTriangles.emplace_back(baseIdx, baseIdx + 1, baseIdx + 2);
+    }
+
+    for (size_t i = 0; i < indices.size(); i += 3) {
+        uint32_t v0 = indices[i];
+        uint32_t v1 = indices[i + 1];
+        uint32_t v2 = indices[i + 2];
+        if (!exteriorIsCCW) {
+            outTriangles.emplace_back(v0, v2, v1);
+        } else {
+            outTriangles.emplace_back(v0, v1, v2);
+        }
     }
 }
 

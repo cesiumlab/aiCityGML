@@ -10,7 +10,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # VS2019 兼容性设置
 if(MSVC_VERSION LESS 1930)
-    # 禁用某些可能导致内部编译器错误的高级优化
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:__cplusplus")
 endif()
 
@@ -26,31 +25,57 @@ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /RTC1-")
 set(CMAKE_CXX_FLAGS_RELEASE "/MD /W4 /O2 /Ob2 /GL /D NDEBUG /EHsc")
 
 # ============================================================
-# 依赖库
+# 依赖库（CMake file(DOWNLOAD) 方式获取）
 # ============================================================
-set(TINYXML2_ROOT "${CMAKE_SOURCE_DIR}/tinyxml2-master")
-set(EARCUT_ROOT   "${CMAKE_SOURCE_DIR}/earcut.hpp-master")
+# tinyxml2: https://github.com/leethomason/tinyxml2
+#   版本: >= 9.0.0（推荐 9.0.0）
+# earcut:   https://github.com/mapbox/earcut.hpp
+#   版本: 任意（推荐 v2.2.4）
+# ============================================================
+set(_DEPS_DIR "${CMAKE_BINARY_DIR}/_deps")
+file(MAKE_DIRECTORY "${_DEPS_DIR}")
 
-if(NOT EXISTS "${TINYXML2_ROOT}/tinyxml2.h")
-    message(FATAL_ERROR "请先编译 TinyXML-2: e:\\opensource\\citygml\\tinyxml2-master")
+# --- tinyxml2 ---
+set(_TINYXML2_ZIP  "${_DEPS_DIR}/tinyxml2-9.0.0.zip")
+if(NOT EXISTS "${_TINYXML2_ZIP}")
+    message(STATUS "Downloading tinyxml2 9.0.0...")
+    file(DOWNLOAD https://github.com/leethomason/tinyxml2/archive/refs/tags/9.0.0.zip
+        "${_TINYXML2_ZIP}" TIMEOUT 120 STATUS _DL)
+    list(GET _DL 0 _CODE)
+    if(NOT _CODE EQUAL 0)
+        message(FATAL_ERROR "tinyxml2 download failed: ${_DL}")
+    endif()
 endif()
-if(NOT EXISTS "${EARCUT_ROOT}/include/mapbox/earcut.hpp")
-    message(FATAL_ERROR "请先编译 Earcut: e:\\opensource\\citygml\\earcut.hpp-master")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xzf "${_TINYXML2_ZIP}"
+    WORKING_DIRECTORY "${_DEPS_DIR}" RESULT_VARIABLE _RET)
+if(NOT _RET EQUAL 0)
+    message(FATAL_ERROR "tinyxml2 extract failed")
 endif()
+# zip 带顶层目录，解压后为 _deps/tinyxml2-9.0.0/
+file(GLOB _TX2 "${_DEPS_DIR}/tinyxml2-9.0.0")
+set(TINYXML2_ROOT "${_TX2}")
+add_subdirectory("${TINYXML2_ROOT}" "${_DEPS_DIR}/tinyxml2-build" EXCLUDE_FROM_ALL)
 
-# ============================================================
-# TinyXML2 子项目（使用与主项目一致的编译配置）
-# ============================================================
-add_library(tinyxml2_lib STATIC
-    ${TINYXML2_ROOT}/tinyxml2.cpp
-    ${TINYXML2_ROOT}/tinyxml2.h
-)
-target_include_directories(tinyxml2_lib PUBLIC ${TINYXML2_ROOT})
-# 继承主项目的 C++ 标准定义
-target_compile_definitions(tinyxml2_lib PRIVATE
-    $<$<CONFIG:Debug>:_DEBUG>
-    $<$<CONFIG:Release>:NDEBUG>
-)
+# --- earcut ---
+set(_EARCUT_ZIP  "${_DEPS_DIR}/earcut-v2.2.4.zip")
+if(NOT EXISTS "${_EARCUT_ZIP}")
+    message(STATUS "Downloading earcut v2.2.4...")
+    file(DOWNLOAD https://github.com/mapbox/earcut.hpp/archive/refs/tags/v2.2.4.zip
+        "${_EARCUT_ZIP}" TIMEOUT 120 STATUS _DL)
+    list(GET _DL 0 _CODE)
+    if(NOT _CODE EQUAL 0)
+        message(FATAL_ERROR "earcut download failed: ${_DL}")
+    endif()
+endif()
+execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xzf "${_EARCUT_ZIP}"
+    WORKING_DIRECTORY "${_DEPS_DIR}" RESULT_VARIABLE _RET)
+if(NOT _RET EQUAL 0)
+    message(FATAL_ERROR "earcut extract failed")
+endif()
+# zip 带顶层目录，解压后为 _deps/earcut.hpp-v2.2.4/
+file(GLOB _EC "${_DEPS_DIR}/earcut*")
+list(FILTER _EC EXCLUDE REGEX "\\.zip$")  # 排除 zip 文件
+set(EARCUT_ROOT "${_EC}")
 
 # ============================================================
 # 头文件目录
@@ -164,7 +189,13 @@ set(ALL_SOURCES
 )
 
 add_library(citygml_obj_lib STATIC ${ALL_HEADERS} ${ALL_SOURCES})
-target_link_libraries(citygml_obj_lib PRIVATE tinyxml2_lib)
+target_link_libraries(citygml_obj_lib PRIVATE tinyxml2)
+target_include_directories(citygml_obj_lib PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${TINYXML2_ROOT}>
+    $<BUILD_INTERFACE:${EARCUT_ROOT}/include>
+    $<INSTALL_INTERFACE:include>
+)
 
 # ============================================================
 # 测试程序
@@ -177,5 +208,41 @@ add_executable(test_triangulate test_triangulate.cpp)
 # ============================================================
 # 安装规则
 # ============================================================
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    # CMake 默认安装到 C:/Program Files/...，改为项目下的 install/ 目录
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/install" CACHE PATH "Installation prefix" FORCE)
+endif()
+
+# --- 1. citygml 公共头文件 ---
 install(DIRECTORY include/citygml
-        DESTINATION include)
+        DESTINATION include
+        FILES_MATCHING PATTERN "*.h")
+
+# --- 2. tinyxml2 头文件 ---
+install(FILES
+        ${TINYXML2_ROOT}/tinyxml2.h
+        DESTINATION include/tinyxml2)
+
+# --- 3. earcut 头文件 ---
+install(FILES ${EARCUT_ROOT}/include/mapbox/earcut.hpp
+        DESTINATION include/mapbox)
+
+# --- 4. 静态库 (.lib) ---
+install(TARGETS citygml_obj_lib tinyxml2
+        EXPORT citygml-targets
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib)
+
+# --- 5. 导出 CMake 配置（供外部项目 find_package 使用）---
+install(EXPORT citygml-targets
+        FILE citygml-targets.cmake
+        NAMESPACE citygml::
+        DESTINATION lib/cmake/citygml)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/citygml-config.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/citygml-config.cmake
+    INSTALL_DESTINATION lib/cmake/citygml)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/citygml-config.cmake
+        DESTINATION lib/cmake/citygml)

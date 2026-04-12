@@ -231,20 +231,26 @@ void CityGMLReader::parseAddresses(void* node, std::shared_ptr<CityObject> obj) 
 }
 
 void CityGMLReader::parseBoundedBy(void* node, std::shared_ptr<CityObject> obj) {
-    // 循环处理所有 boundedBy 子元素（每个 ThematicSurface 一个）
+    // 循环处理所有 boundedBy/boundary 子元素（每个 ThematicSurface 一个）
     void* boundedBy = nullptr;
-    const char* prefixes[] = {"bldg:", ""};
+    // 尝试多种前缀和名称组合
+    const char* names[] = {"boundary", "boundedBy"};
+    const char* prefixes[] = {"bldg:", "con:", ""};
 
-    for (const char* prefix : prefixes) {
-        boundedBy = XMLDocument::child(node, std::string(prefix) + "boundedBy");
+    for (const char* name : names) {
+        for (const char* prefix : prefixes) {
+            boundedBy = XMLDocument::child(node, std::string(prefix) + name);
+            if (boundedBy) break;
+        }
         if (boundedBy) break;
     }
 
     while (boundedBy) {
         parseBoundedByElement(boundedBy, obj);
 
-        // 查找下一个 boundedBy 兄弟元素（精确匹配 local name = boundedBy）
-        void* next = XMLDocument::nextSiblingElement(boundedBy, "boundedBy");
+        // 查找下一个 boundary/boundedBy 兄弟元素
+        void* next = XMLDocument::nextSiblingElement(boundedBy, "boundary");
+        if (!next) next = XMLDocument::nextSiblingElement(boundedBy, "boundedBy");
         boundedBy = next;
     }
 }
@@ -284,7 +290,8 @@ void CityGMLReader::parseBoundedByElement(void* boundedByNode, std::shared_ptr<C
     for (int lod = 4; lod >= 0; --lod) {
         std::string lodNames[] = {
             "lod" + std::to_string(lod) + "MultiSurface",
-            "bldg:lod" + std::to_string(lod) + "MultiSurface"
+            "bldg:lod" + std::to_string(lod) + "MultiSurface",
+            "con:lod" + std::to_string(lod) + "MultiSurface"
         };
 
         for (const auto& lodName : lodNames) {
@@ -353,7 +360,8 @@ void CityGMLReader::parseOpenings(void* parentNode, std::shared_ptr<AbstractThem
                 for (int lod = 0; lod <= 4; ++lod) {
                     std::string lodNames[] = {
                         "lod" + std::to_string(lod) + "MultiSurface",
-                        "bldg:lod" + std::to_string(lod) + "MultiSurface"
+                        "bldg:lod" + std::to_string(lod) + "MultiSurface",
+                        "con:lod" + std::to_string(lod) + "MultiSurface"
                     };
 
                     for (const auto& lodName : lodNames) {

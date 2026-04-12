@@ -1,5 +1,10 @@
 # CityGML 转 OBJ 转换器
 
+基于Vibe Coding完成的 citygml解析器，主要特性：
+1，兼容 citygml2.0 和 citygml3.0 标准
+2，支持 各种几何体生成 三角化mesh
+3，支持导出 obj格式的模型
+
 一个纯 C++ 实现的 CityGML 1.0 / 2.0 / 3.0 数据解析与 Wavefront OBJ 格式生成工具。
 
 ## 功能特性
@@ -44,13 +49,23 @@ citygml-to-obj/
     └── 2.gml                   # CityGML 2.0 建筑示例（含纹理）
 ```
 
+## 第三方依赖
+
+| 库 | 版本要求 | 地址 | 说明 |
+|---|---|---|---|
+| **tinyxml2** | >= 9.0.0（推荐 9.0.0） | https://github.com/leethomason/tinyxml2 | XML 解析，C++ 源文件 tinyxml2.h + tinyxml2.cpp |
+| **earcut.hpp** | 任意版本（推荐 v2.2.4） | https://github.com/mapbox/earcut.hpp | 多边形三角化，单文件头文件库 |
+
+> CMake 会通过 FetchContent 自动下载，无需手动准备。网络不通时需配置 git 代理：
+> `git config --global http.proxy http://127.0.0.1:7890`
+
 ## 构建说明
 
 ### 环境要求
 
 - **C++ 编译器**：支持 C++17（MSVC 2019+ / GCC 9+ / Clang 12+）
 - **CMake**：3.16 或更高版本
-- **网络**：首次构建需联网下载 TinyXML-2 和 Earcut（通过 CMake FetchContent）
+- **网络**：首次构建需联网下载 TinyXML-2 和 Earcut（通过 CMake FetchContent 自动下载）
 
 ### 快速构建（Windows / MSVC）
 
@@ -58,28 +73,25 @@ citygml-to-obj/
 # 1. 进入项目目录
 cd e:\opensource\citygml
 
-# 2. 创建构建目录
-mkdir build
-cd build
+# 2. 配置 + 编译（一行命令搞定）
+cmake -B build -G "Visual Studio 16 2019" -A x64
+cmake --build build --config Release --parallel
 
-# 3. 配置 CMake（使用 MSVC）
-cmake .. -G "Visual Studio 17 2022" -A x64
+# 3. 安装（头文件 + lib）
+cmake --install build --config Release
 
-# 4. 编译
-cmake --build . --config Release
-
-# 5. 运行单元测试
-ctest -C Release --output-on-failure
+# 4. 运行测试
+build\Release\test_parser.exe
 ```
 
 ### 快速构建（Linux / macOS）
 
 ```bash
 cd e:/opensource/citygml
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-./tests/test_converter
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+cmake --install build
+./build/test_parser
 ```
 
 ### 使用 CMake GUI 或 Visual Studio
