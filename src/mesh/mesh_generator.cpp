@@ -214,14 +214,15 @@ static void triangulateRing(const std::vector<Vec3>& pts,
         const Vec2& p1 = clean2d[(i + 1) % clean2d.size()];
         polygonArea += p0.u * p1.v - p1.u * p0.v;
     }
-    bool flipRing = (polygonArea < 0.0);
+    bool flipRing = (polygonArea > 0.0);
 
     uint32_t baseIdx = static_cast<uint32_t>(outVerts.size());
     for (size_t i = 0; i < clean3d.size(); ++i) {
+        Vec3 n{-z_axis.x, -z_axis.y, -z_axis.z};
         if (uvPts && i < clean2d.size()) {
-            outVerts.emplace_back(clean3d[i], z_axis, clean2d[i]);
+            outVerts.emplace_back(clean3d[i], n, clean2d[i]);
         } else {
-            outVerts.emplace_back(clean3d[i], z_axis);
+            outVerts.emplace_back(clean3d[i], n);
         }
     }
     for (size_t i = 0; i < indices.size(); i += 3) {
@@ -713,7 +714,7 @@ void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
 
     // Emit triangles directly from earcut output (no winding swap).
     for (size_t i = 0; i < indices.size(); i += 3) {
-        outTriangles.emplace_back(indices[i], indices[i + 1], indices[i + 2]);
+        outTriangles.emplace_back(indices[i], indices[i + 2], indices[i + 1]);
     }
 }
 
@@ -1083,7 +1084,7 @@ void triangulateRings(const LinearRing& exterior,
     }
 
     for (size_t i = 0; i < indices.size(); i += 3) {
-        outTriangles.emplace_back(baseIdx + indices[i], baseIdx + indices[i + 1], baseIdx + indices[i + 2]);
+        outTriangles.emplace_back(baseIdx + indices[i], baseIdx + indices[i + 2], baseIdx + indices[i + 1]);
     }
 }
 
