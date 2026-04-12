@@ -3,8 +3,8 @@
 #include <string>
 #include <memory>
 #include <map>
-#include "citygml/core/citygml_object.h"
-#include "citygml/parser/gml_geometry_parser.h"
+#include "core/citygml_object.h"
+#include "parser/gml_geometry_parser.h"
 
 namespace citygml {
 

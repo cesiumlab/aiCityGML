@@ -1,10 +1,10 @@
 #pragma once
 
-#include "citygml/mesh/mesh.h"
-#include "citygml/core/citygml_geometry.h"
-#include "citygml/core/citygml_surface.h"
-#include "citygml/core/citygml_opening.h"
-#include "citygml/core/citygml_object.h"
+#include "mesh/mesh.h"
+#include "core/citygml_geometry.h"
+#include "core/citygml_surface.h"
+#include "core/citygml_object.h"
+#include "core/citygml_opening.h"
 #include <vector>
 #include <memory>
 

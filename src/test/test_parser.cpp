@@ -1,9 +1,9 @@
 #include <iostream>
 #include <iomanip>
 #include <fstream>
-#include "citygml/citygml_parser.h"
-#include "citygml/mesh/mesh_generator.h"
-#include "citygml/writers/obj_writer.h"
+#include "parser/citygml_parser.h"
+#include "mesh/mesh_generator.h"
+#include "writers/obj_writer.h"
 
 using namespace citygml;
 

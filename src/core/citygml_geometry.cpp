@@ -1,4 +1,4 @@
-#include "citygml/core/citygml_geometry.h"
+#include "core/citygml_geometry.h"
 
 namespace citygml {
 

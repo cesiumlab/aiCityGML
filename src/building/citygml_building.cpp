@@ -1,4 +1,4 @@
-#include "citygml/building/citygml_building.h"
+#include "building/citygml_building.h"
 
 namespace citygml {
 

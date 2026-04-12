@@ -1,8 +1,8 @@
 #pragma once
 
-#include "citygml/core/citygml_base.h"
-#include "citygml/core/citygml_space.h"
-#include "citygml/core/citygml_geometry.h"
+#include "core/citygml_base.h"
+#include "core/citygml_space.h"
+#include "core/citygml_geometry.h"
 
 namespace citygml {
 

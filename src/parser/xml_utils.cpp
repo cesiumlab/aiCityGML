@@ -1,4 +1,4 @@
-#include "citygml/parser/xml_utils.h"
+#include "xml_utils.h"
 #include <algorithm>
 #include <cctype>
 #include <sstream>

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "citygml/core/citygml_feature.h"
-#include "citygml/core/citygml_base.h"
+#include "core/citygml_feature.h"
+#include "core/citygml_base.h"
 #include <memory>
 #include <vector>
 

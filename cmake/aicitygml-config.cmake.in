@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+set(TINYXML2_ROOT "@PACKAGE_TINYXML2_ROOT@")
+set(TINYXML2_INCLUDE_DIR "@PACKAGE_TINYXML2_INCLUDE_DIR@")
+
+include("${CMAKE_CURRENT_LIST_DIR}/aicitygml-targets.cmake")
+
+check_required_components(aicitygml)

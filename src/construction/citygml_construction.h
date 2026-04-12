@@ -1,6 +1,6 @@
 #pragma once
 
-#include "citygml/core/citygml_feature.h"
+#include "core/citygml_feature.h"
 
 namespace citygml {
 

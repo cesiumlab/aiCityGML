@@ -1,9 +1,9 @@
 #pragma once
 
-#include "citygml/core/citygml_feature.h"
-#include "citygml/core/citygml_appearance.h"
-#include "citygml/core/citygml_geometry.h"
-#include "citygml/building/citygml_building.h"
+#include "core/citygml_feature.h"
+#include "core/citygml_appearance.h"
+#include "core/citygml_geometry.h"
+#include "building/citygml_building.h"
 
 namespace citygml {
 

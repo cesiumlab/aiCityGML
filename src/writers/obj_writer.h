@@ -2,7 +2,7 @@
 
 #include <string>
 #include <vector>
-#include "citygml/mesh/mesh.h"
+#include "mesh/mesh.h"
 
 namespace citygml {
 

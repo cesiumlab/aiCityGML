@@ -1,6 +1,6 @@
-#include "citygml/mesh/mesh_generator.h"
-#include "citygml/core/citygml_appearance.h"
-#include "citygml/mesh/mesh.h"
+#include "mesh_generator.h"
+#include "core/citygml_appearance.h"
+#include "mesh.h"
 #include <mapbox/earcut.hpp>
 #include <algorithm>
 #include <array>

@@ -1,4 +1,4 @@
-#include "citygml/mesh/mesh.h"
+#include "mesh/mesh.h"
 #include <cmath>
 
 namespace citygml {

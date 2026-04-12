@@ -1,4 +1,4 @@
-#include "citygml/writers/obj_writer.h"
+#include "obj_writer.h"
 #include <fstream>
 #include <iomanip>
 #include <sstream>

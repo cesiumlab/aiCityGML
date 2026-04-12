@@ -1,4 +1,4 @@
-#include "citygml/parser/parser_context.h"
+#include "parser_context.h"
 
 namespace citygml {
 

@@ -1,7 +1,7 @@
-#include "citygml/parser/gml_geometry_parser.h"
-#include "citygml/parser/xml_document.h"
-#include "citygml/parser/parser_context.h"
-#include "citygml/core/citygml_geometry.h"
+#include "gml_geometry_parser.h"
+#include "xml_document.h"
+#include "parser_context.h"
+#include "core/citygml_geometry.h"
 #include <sstream>
 
 namespace citygml {

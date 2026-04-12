@@ -1,14 +1,16 @@
-#include "citygml/citygml_parser.h"
-#include "citygml/parser/xml_document.h"
-#include "citygml/parser/gml_geometry_parser.h"
-#include "citygml/parser/citygml_reader.h"
-#include "citygml/parser/gml_envelope_parser.h"
-#include "citygml/core/citygml_appearance.h"
-#include "citygml/core/citygml_geometry.h"
+#include "citygml_parser.h"
+#include "parser_context.h"
+#include "xml_document.h"
+#include "gml_geometry_parser.h"
+#include "citygml_reader.h"
+#include "gml_envelope_parser.h"
+#include "core/citygml_appearance.h"
+#include "core/citygml_geometry.h"
 
 #include <map>
 #include <set>
 #include <iostream>
+#include <sstream>
 
 namespace citygml {
 
