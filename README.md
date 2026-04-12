@@ -23,30 +23,24 @@
 ```
 citygml-to-obj/
 ├── CMakeLists.txt              # CMake 构建配置
-├── conanfile.txt               # Conan 依赖管理（可选）
 ├── README.md                   # 本文件
-├── include/citygml/            # 头文件
-│   ├── types.h                 # 数据类型定义
-│   ├── geometry.h              # 几何计算工具
-│   ├── xml_parser.h            # XML/GML 解析器
-│   ├── citygml_reader.h        # CityGML 读取器
-│   ├── geometry_processor.h    # 几何处理（三角化）
-│   ├── obj_writer.h            # OBJ 文件写入器
-│   └── citygml.h               # 主入口 API
-├── src/                        # 源文件
-│   ├── types.cpp
-│   ├── geometry.cpp
-│   ├── xml_parser.cpp
-│   ├── citygml_reader.cpp      # 核心：CityGML 文档解析
-│   ├── geometry_processor.cpp  # 核心：三角网格生成
-│   ├── obj_writer.cpp         # 核心：OBJ/MTL 文件写入
-│   ├── citygml_model.cpp
-│   ├── citygml.cpp
-│   └── main.cpp                # 命令行工具
-├── tests/
-│   └── test_converter.cpp      # 单元测试
+├── src/                        # 源文件 + 头文件
+│   ├── citygml/               # 头文件（.h）
+│   │   ├── citygml_parser.h    # 主入口 API
+│   │   ├── building/           # 建筑模块
+│   │   ├── construction/       # 构造模块
+│   │   ├── core/               # 核心模块（Geometry、Surface、Space...）
+│   │   ├── mesh/               # 网格模块
+│   │   ├── parser/             # 解析器模块
+│   │   └── writers/            # OBJ 写入器
+│   ├── building/               # 建筑模块实现
+│   ├── construction/           # 构造模块实现
+│   ├── core/                   # 核心模块实现
+│   ├── mesh/                   # 网格模块实现
+│   ├── parser/                 # 解析器模块实现
+│   └── writers/                # 写入器实现
+├── tests/                      # 单元测试
 └── testdata/                   # 测试数据
-    └── 2.gml                   # CityGML 2.0 建筑示例（含纹理）
 ```
 
 ## 第三方依赖

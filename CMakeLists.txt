@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(citygml-to-obj VERSION 1.0.0 LANGUAGES CXX)
+project(aiCityGML VERSION 1.0.0 LANGUAGES CXX)
 
 # ============================================================
 # 编译选项
@@ -7,6 +7,9 @@ project(citygml-to-obj VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Debug 库后缀 d
+set(CMAKE_DEBUG_POSTFIX "d")
 
 # VS2019 兼容性设置
 if(MSVC_VERSION LESS 1930)
@@ -81,7 +84,7 @@ set(EARCUT_ROOT "${_EC}")
 # 头文件目录
 # ============================================================
 include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${TINYXML2_ROOT}
     ${EARCUT_ROOT}/include
 )
@@ -90,13 +93,13 @@ include_directories(
 # CityGML Core 模块
 # ============================================================
 set(CITYGML_CORE_HEADERS
-    include/citygml/core/citygml_base.h
-    include/citygml/core/citygml_feature.h
-    include/citygml/core/citygml_geometry.h
-    include/citygml/core/citygml_space.h
-    include/citygml/core/citygml_surface.h
-    include/citygml/core/citygml_appearance.h
-    include/citygml/core/citygml_object.h
+    src/citygml/core/citygml_base.h
+    src/citygml/core/citygml_feature.h
+    src/citygml/core/citygml_geometry.h
+    src/citygml/core/citygml_space.h
+    src/citygml/core/citygml_surface.h
+    src/citygml/core/citygml_appearance.h
+    src/citygml/core/citygml_object.h
 )
 
 set(CITYGML_CORE_SOURCES
@@ -113,7 +116,7 @@ set(CITYGML_CORE_SOURCES
 # CityGML Building 模块
 # ============================================================
 set(CITYGML_BUILDING_HEADERS
-    include/citygml/building/citygml_building.h
+    src/citygml/building/citygml_building.h
 )
 
 set(CITYGML_BUILDING_SOURCES
@@ -124,7 +127,7 @@ set(CITYGML_BUILDING_SOURCES
 # CityGML Construction 模块
 # ============================================================
 set(CITYGML_CONSTRUCTION_HEADERS
-    include/citygml/construction/citygml_construction.h
+    src/citygml/construction/citygml_construction.h
 )
 
 set(CITYGML_CONSTRUCTION_SOURCES
@@ -135,13 +138,13 @@ set(CITYGML_CONSTRUCTION_SOURCES
 # CityGML Parser 模块
 # ============================================================
 set(CITYGML_PARSER_HEADERS
-    include/citygml/citygml_parser.h
-    include/citygml/parser/parser_context.h
-    include/citygml/parser/xml_document.h
-    include/citygml/parser/gml_envelope_parser.h
-    include/citygml/parser/gml_geometry_parser.h
-    include/citygml/parser/citygml_reader.h
-    include/citygml/parser/xml_utils.h
+    src/citygml/citygml_parser.h
+    src/citygml/parser/parser_context.h
+    src/citygml/parser/xml_document.h
+    src/citygml/parser/gml_envelope_parser.h
+    src/citygml/parser/gml_geometry_parser.h
+    src/citygml/parser/citygml_reader.h
+    src/citygml/parser/xml_utils.h
 )
 
 set(CITYGML_PARSER_SOURCES
@@ -158,9 +161,9 @@ set(CITYGML_PARSER_SOURCES
 # CityGML Mesh 模块
 # ============================================================
 set(CITYGML_MESH_HEADERS
-    include/citygml/mesh/mesh.h
-    include/citygml/mesh/mesh_generator.h
-    include/citygml/writers/obj_writer.h
+    src/citygml/mesh/mesh.h
+    src/citygml/mesh/mesh_generator.h
+    src/citygml/writers/obj_writer.h
 )
 
 set(CITYGML_MESH_SOURCES
@@ -188,10 +191,10 @@ set(ALL_SOURCES
     ${CITYGML_PARSER_SOURCES}
 )
 
-add_library(citygml_obj_lib STATIC ${ALL_HEADERS} ${ALL_SOURCES})
-target_link_libraries(citygml_obj_lib PRIVATE tinyxml2)
-target_include_directories(citygml_obj_lib PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+add_library(aicitygml STATIC ${ALL_HEADERS} ${ALL_SOURCES})
+target_link_libraries(aicitygml PRIVATE tinyxml2)
+target_include_directories(aicitygml PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<BUILD_INTERFACE:${TINYXML2_ROOT}>
     $<BUILD_INTERFACE:${EARCUT_ROOT}/include>
     $<INSTALL_INTERFACE:include>
@@ -200,10 +203,10 @@ target_include_directories(citygml_obj_lib PUBLIC
 # ============================================================
 # 测试程序
 # ============================================================
-add_executable(test_parser test_parser.cpp)
-target_link_libraries(test_parser PRIVATE citygml_obj_lib)
+add_executable(test_parser src/test/test_parser.cpp)
+target_link_libraries(test_parser PRIVATE aicitygml)
 
-add_executable(test_triangulate test_triangulate.cpp)
+add_executable(test_triangulate src/test/test_triangulate.cpp)
 
 # ============================================================
 # 安装规则
@@ -214,13 +217,12 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 # --- 1. citygml 公共头文件 ---
-install(DIRECTORY include/citygml
+install(DIRECTORY src/citygml
         DESTINATION include
         FILES_MATCHING PATTERN "*.h")
 
 # --- 2. tinyxml2 头文件 ---
-install(FILES
-        ${TINYXML2_ROOT}/tinyxml2.h
+install(FILES ${TINYXML2_ROOT}/tinyxml2.h
         DESTINATION include/tinyxml2)
 
 # --- 3. earcut 头文件 ---
@@ -228,21 +230,21 @@ install(FILES ${EARCUT_ROOT}/include/mapbox/earcut.hpp
         DESTINATION include/mapbox)
 
 # --- 4. 静态库 (.lib) ---
-install(TARGETS citygml_obj_lib tinyxml2
-        EXPORT citygml-targets
+install(TARGETS aicitygml tinyxml2
+        EXPORT aicitygml-targets
         ARCHIVE DESTINATION lib
         LIBRARY DESTINATION lib)
 
 # --- 5. 导出 CMake 配置（供外部项目 find_package 使用）---
-install(EXPORT citygml-targets
-        FILE citygml-targets.cmake
-        NAMESPACE citygml::
-        DESTINATION lib/cmake/citygml)
+install(EXPORT aicitygml-targets
+        FILE aicitygml-targets.cmake
+        NAMESPACE aicitygml::
+        DESTINATION lib/cmake/aicitygml)
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/citygml-config.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/citygml-config.cmake
-    INSTALL_DESTINATION lib/cmake/citygml)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/citygml-config.cmake
-        DESTINATION lib/cmake/citygml)
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/aicitygml-config.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/aicitygml-config.cmake
+    INSTALL_DESTINATION lib/cmake/aicitygml)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/aicitygml-config.cmake
+        DESTINATION lib/cmake/aicitygml)

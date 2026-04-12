@@ -12,8 +12,9 @@ install/
 x64/
 x86/
 
-# CMake 临时配置
-cmake/
+# CMake 临时配置（忽略构建缓存，保留 .cmake.in 模板）
+cmake/CMakeCache.txt
+cmake/CMakeFiles/
 
 # 第三方依赖
 tinyxml2-master/
