@@ -411,4 +411,44 @@ std::shared_ptr<CityModel> parseCityGML(const std::string& filePath, std::string
     return cityModel;
 }
 
+// ============================================================
+// 快速查找 srsName - 使用 SAX 风格流式读取，避免完整加载 DOM
+// ============================================================
+
+static std::string quickGetFirstSrsNameFromFile(const std::string& filePath) {
+    XMLDocument doc;
+    if (!doc.loadFile(filePath.c_str())) {
+        return "";
+    }
+
+    // 从根节点开始递归查找 srsName 属性
+    struct Walker {
+        static std::string findSrsName(void* node) {
+            if (!node) return "";
+
+            std::string val = XMLDocument::attribute(node, "srsName");
+            if (!val.empty()) return val;
+
+            // 尝试带命名空间前缀的 srsName（gml:srsName）
+            val = XMLDocument::attribute(node, "gml:srsName");
+            if (!val.empty()) return val;
+
+            // 递归遍历子节点
+            void* child = XMLDocument::firstChildElement(node);
+            while (child) {
+                std::string result = findSrsName(child);
+                if (!result.empty()) return result;
+                child = XMLDocument::nextSiblingElement(child);
+            }
+            return "";
+        }
+    };
+
+    return Walker::findSrsName(doc.root());
+}
+
+std::string CityGMLParser::quickGetFirstSrsName(const std::string& filePath) {
+    return quickGetFirstSrsNameFromFile(filePath);
+}
+
 } // namespace citygml

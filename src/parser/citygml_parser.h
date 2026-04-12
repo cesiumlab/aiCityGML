@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <string>
 #include <memory>
@@ -57,6 +57,9 @@ public:
                            const ParseOptions& options = {});
 
     const std::vector<std::string>& getWarnings() const;
+
+    // 快速查找 XML 文件中第一个 srsName 属性值（找到即返回，不解析整个文件）
+    static std::string quickGetFirstSrsName(const std::string& filePath);
 
 private:
     ParseResult initializeParser(const std::string& filePath);

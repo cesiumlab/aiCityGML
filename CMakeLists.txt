@@ -178,6 +178,9 @@ target_include_directories(aicitygml PUBLIC
 add_executable(test_parser src/test/test_parser.cpp)
 target_link_libraries(test_parser PRIVATE aicitygml)
 
+add_executable(test_srsname src/test/test_srsname.cpp)
+target_link_libraries(test_srsname PRIVATE aicitygml)
+
 add_executable(test_triangulate src/test/test_triangulate.cpp)
 
 # ============================================================
