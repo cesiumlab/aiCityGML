@@ -50,6 +50,8 @@ struct Vertex {
     Vertex(const Vec3& pos, const Vec3& norm) : position(pos), normal(norm) {}
     Vertex(const Vec3& pos, const Vec3& norm, const Vec2& texCoord)
         : position(pos), normal(norm), uv(texCoord) {}
+
+    void setNormal(const Vec3& n) { normal = n; }
 };
 
 // ================================================================

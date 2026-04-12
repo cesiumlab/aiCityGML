@@ -23,11 +23,11 @@ add_compile_definitions($<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS)
 # VS2019 /std:c++17
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++17")
 
-# Debug: 关闭默认的 /RTC1（与 /O2 不兼容），使用 /Od
-set(CMAKE_CXX_FLAGS_DEBUG "/MDd /W4 /Od /Ob0 /Zi /D_DEBUG /EHsc /RTC1-")
+# Debug: 关闭默认的 /RTC1，使用 /Od /MDd（动态链接）
+set(CMAKE_CXX_FLAGS_DEBUG "/W4 /Od /Ob0 /Zi /D_DEBUG /EHsc /MDd")
 
-# Release: 优化选项
-set(CMAKE_CXX_FLAGS_RELEASE "/MD /W4 /O2 /Ob2 /GL /D NDEBUG /EHsc")
+# Release: 优化选项 /MD（动态链接）
+set(CMAKE_CXX_FLAGS_RELEASE "/W4 /O2 /Ob2 /GL /D NDEBUG /EHsc /MD")
 
 # ============================================================
 # 依赖库
