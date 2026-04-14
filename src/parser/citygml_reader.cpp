@@ -152,12 +152,14 @@ std::shared_ptr<CityObject> CityGMLReader::readBuilding(void* node) {
 }
 
 void CityGMLReader::parseInteriorRooms(void* node, std::shared_ptr<CityObject> obj) {
-    // 查找 bldg:interiorRoom 或 interiorRoom
+    // 查找 bldg:interiorRoom, bldg:buildingRoom 或对应的无命名空间版本
     void* interiorRoom = XMLDocument::child(node, "bldg:interiorRoom");
     if (!interiorRoom) interiorRoom = XMLDocument::child(node, "interiorRoom");
+    if (!interiorRoom) interiorRoom = XMLDocument::child(node, "bldg:buildingRoom");
+    if (!interiorRoom) interiorRoom = XMLDocument::child(node, "buildingRoom");
 
     while (interiorRoom) {
-        // interiorRoom 的第一个子元素是 Room
+        // interiorRoom 的第一个子元素是 Room 或 BuildingRoom
         void* roomNode = XMLDocument::firstChildElement(interiorRoom);
         if (roomNode) {
             std::string roomType = getLocalName(roomNode);
@@ -185,12 +187,71 @@ void CityGMLReader::parseInteriorRooms(void* node, std::shared_ptr<CityObject> o
                 // 解析 LOD 几何体
                 parseLODGeometries(roomNode, room);
 
+                // 解析 bldg:interiorFurniture (家具)
+                parseInteriorFurniture(roomNode, room);
+
                 obj->addChildCityObject(room);
             }
         }
 
-        interiorRoom = XMLDocument::nextSiblingElement(interiorRoom, "bldg:interiorRoom");
-        if (!interiorRoom) interiorRoom = XMLDocument::nextSiblingElement(interiorRoom, "interiorRoom");
+        // 查找下一个 interiorRoom 兄弟元素（使用通用方式，不依赖命名空间前缀）
+        void* next = XMLDocument::nextSiblingElement(interiorRoom, "interiorRoom");
+        if (!next) next = XMLDocument::nextSiblingElement(interiorRoom, "bldg:interiorRoom");
+        if (!next) next = XMLDocument::nextSiblingElement(interiorRoom, "buildingRoom");
+        if (!next) next = XMLDocument::nextSiblingElement(interiorRoom, "bldg:buildingRoom");
+        interiorRoom = next;
+    }
+}
+
+void CityGMLReader::parseInteriorFurniture(void* roomNode, std::shared_ptr<CityObject> room) {
+    // 查找 bldg:interiorFurniture 或 interiorFurniture
+    void* interiorFurniture = XMLDocument::child(roomNode, "bldg:interiorFurniture");
+    if (!interiorFurniture) interiorFurniture = XMLDocument::child(roomNode, "interiorFurniture");
+
+    while (interiorFurniture) {
+        // interiorFurniture 的第一个子元素是 BuildingFurniture
+        void* furnitureNode = XMLDocument::firstChildElement(interiorFurniture);
+        if (furnitureNode) {
+            std::string furnitureType = getLocalName(furnitureNode);
+            if (furnitureType == "BuildingFurniture") {
+                auto furniture = std::make_shared<CityObject>("BuildingFurniture");
+
+                // 解析 gml:id
+                std::string gmlId = XMLDocument::attribute(furnitureNode, "gml:id");
+                if (!gmlId.empty()) {
+                    furniture->setId(gmlId);
+                }
+
+                // 解析 gml:name
+                void* nameNode = XMLDocument::child(furnitureNode, "gml:name");
+                if (nameNode) {
+                    furniture->setName(XMLDocument::text(nameNode));
+                }
+
+                // 解析 gml:description
+                void* descNode = XMLDocument::child(furnitureNode, "gml:description");
+                if (descNode) {
+                    furniture->setDescription(XMLDocument::text(descNode));
+                }
+
+                // 解析 bldg:function
+                void* funcNode = XMLDocument::child(furnitureNode, "bldg:function");
+                if (!funcNode) funcNode = XMLDocument::child(furnitureNode, "function");
+                if (funcNode) {
+                    furniture->setDescription(XMLDocument::text(funcNode));
+                }
+
+                // 解析 LOD 几何体（主要是 lod4Geometry）
+                parseLODGeometries(furnitureNode, furniture);
+
+                room->addChildCityObject(furniture);
+            }
+        }
+
+        // 查找下一个 interiorFurniture 兄弟元素
+        void* next = XMLDocument::nextSiblingElement(interiorFurniture, "interiorFurniture");
+        if (!next) next = XMLDocument::nextSiblingElement(interiorFurniture, "bldg:interiorFurniture");
+        interiorFurniture = next;
     }
 }
 
@@ -795,9 +856,14 @@ void CityGMLReader::parseLODGeometries(void* node, std::shared_ptr<CityObject> o
     for (int lod = 1; lod <= 4; ++lod) {
         std::string lodSurfaceName1 = "lod" + std::to_string(lod) + "MultiSurface";
         std::string lodSurfaceName2 = "bldg:lod" + std::to_string(lod) + "MultiSurface";
+        // Furniture 使用 lod4Geometry 而不是 lod4MultiSurface
+        std::string lodGeomName = "lod" + std::to_string(lod) + "Geometry";
+        std::string lodGeomName2 = "bldg:lod" + std::to_string(lod) + "Geometry";
 
         void* lodGeom = XMLDocument::child(node, lodSurfaceName1);
         if (!lodGeom) lodGeom = XMLDocument::child(node, lodSurfaceName2);
+        if (!lodGeom) lodGeom = XMLDocument::child(node, lodGeomName);
+        if (!lodGeom) lodGeom = XMLDocument::child(node, lodGeomName2);
 
         std::shared_ptr<MultiSurface> ms;
         if (tryParseMultiSurface(lodGeom, ms)) {
@@ -814,9 +880,14 @@ void CityGMLReader::parseLODGeometries(void* node, std::shared_ptr<CityObject> o
     for (int lod = 1; lod <= 4; ++lod) {
         std::string lodSolidName1 = "lod" + std::to_string(lod) + "Solid";
         std::string lodSolidName2 = "bldg:lod" + std::to_string(lod) + "Solid";
+        // Furniture 使用 lodGeometry 也可以包含 Solid
+        std::string lodGeomName = "lod" + std::to_string(lod) + "Geometry";
+        std::string lodGeomName2 = "bldg:lod" + std::to_string(lod) + "Geometry";
 
         void* lodGeom = XMLDocument::child(node, lodSolidName1);
         if (!lodGeom) lodGeom = XMLDocument::child(node, lodSolidName2);
+        if (!lodGeom) lodGeom = XMLDocument::child(node, lodGeomName);
+        if (!lodGeom) lodGeom = XMLDocument::child(node, lodGeomName2);
 
         std::shared_ptr<Solid> solid;
         if (tryParseSolid(lodGeom, solid)) {

@@ -34,6 +34,16 @@ struct MeshGeneratorOptions {
     // Whether to keep separate submeshes per material/texture (true)
     // or merge everything into one submesh (false).
     bool separateSubMeshes = true;
+
+    // Whether to export Room geometries from bldg:interiorRoom.
+    // When enabled, each Room's LOD geometries will be exported as separate meshes.
+    bool exportRooms = false;
+
+    // When enabled, ONLY export Room geometries, skip Building and other city objects.
+    bool onlyExportRooms = false;
+
+    // When >= 0, export only the N-th Room (0-based index). Default: -1 (all rooms)
+    int roomIndex = -1;
 };
 
 // ================================================================
@@ -45,6 +55,16 @@ public:
 
     void setOptions(const MeshGeneratorOptions& options);
     const MeshGeneratorOptions& getOptions() const { return options_; }
+
+    // =================================================================
+    // CityModel-level entry point
+    // =================================================================
+
+    // Traverse all CityObjects in a CityModel, triangulate their LOD geometries.
+    // Each CityObject becomes one or more output meshes (one mesh per LOD/geometry).
+    // The meshes are appended to outMeshes.
+    void generate(const CityModel& cityModel,
+                  std::vector<Mesh>& outMeshes);
 
     // =================================================================
     // Core triangulation functions
@@ -178,6 +198,28 @@ public:
     static std::vector<TextureCoordinates2D>
     collectTextureCoords(const Polygon& polygon,
                           const ParameterizedTexture& tex);
+
+    // Triangulate Room geometries (bldg:interiorRoom) from childCityObjects.
+    // Each Room's LOD geometries (LOD2-LOD4) will be exported as separate meshes.
+    void triangulateRooms(const CityObject& obj,
+                           std::vector<Mesh>& outMeshes,
+                           const std::set<std::string>* processedPolygonIds = nullptr) const;
+
+    // Triangulate InteriorFurniture (bldg:interiorFurniture -> BuildingFurniture) from Room's childCityObjects.
+    // Each Furniture's LOD geometries (mainly LOD4) will be exported as separate meshes.
+    void triangulateRoomFurniture(const CityObject& room,
+                                  std::vector<Mesh>& outMeshes,
+                                  const std::set<std::string>* processedPolygonIds = nullptr) const;
+
+    // Triangulate ONLY Room geometries from childCityObjects, skip the parent CityObject itself.
+    // Used with --only-rooms option.
+    void triangulateOnlyRooms(const CityModel& cityModel,
+                               std::vector<Mesh>& outMeshes) const;
+
+    // Triangulate a specific Room by index from childCityObjects.
+    // Used with --room-index option.
+    void triangulateRoomByIndex(const CityModel& cityModel,
+                                 std::vector<Mesh>& outMeshes) const;
 
 private:
     MeshGeneratorOptions options_;

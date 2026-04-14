@@ -27,6 +27,7 @@ private:
     void parseOpenings(void* parentNode, std::shared_ptr<AbstractThematicSurface> surface);
     std::shared_ptr<AbstractOpening> createOpening(const std::string& type);
     void parseInteriorRooms(void* node, std::shared_ptr<CityObject> obj);
+    void parseInteriorFurniture(void* roomNode, std::shared_ptr<CityObject> room);
     void parseAddresses(void* node, std::shared_ptr<CityObject> obj);
     void parseNameAndDescription(void* node, std::shared_ptr<CityObject> obj);
     void parseCreationDate(void* node, std::shared_ptr<CityObject> obj);

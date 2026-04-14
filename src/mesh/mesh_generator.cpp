@@ -650,6 +650,68 @@ void MeshGenerator::triangulateRooms(const CityObject& obj,
 
         // Triangulate boundedBy surfaces for the room (interior surfaces like FloorSurface, CeilingSurface, etc.)
         triangulateBoundedBySurfaces(*room, outMeshes, processedPolygonIds);
+
+        // Triangulate interiorFurniture (bldg:interiorFurniture -> BuildingFurniture)
+        triangulateRoomFurniture(*room, outMeshes, processedPolygonIds);
+    }
+}
+
+void MeshGenerator::triangulateRoomFurniture(const CityObject& room,
+                                             std::vector<Mesh>& outMeshes,
+                                             const std::set<std::string>* processedPolygonIds) const {
+    const auto& children = room.getChildCityObjects();
+
+    for (const auto& child : children) {
+        if (!child) continue;
+        if (child->getObjectType() != "BuildingFurniture") continue;
+
+        const CityObject* furniture = child.get();
+        std::string furnitureName = furniture->getId().empty()
+                                       ? furniture->getName()
+                                       : furniture->getId();
+
+        // Collect LOD geometries (mainly LOD 4 for furniture)
+        std::vector<std::shared_ptr<MultiSurface>> candidates;
+        std::vector<std::shared_ptr<Solid>> solidCandidates;
+
+        auto tryAdd = [&](auto ptr) {
+            if (ptr) candidates.push_back(ptr);
+        };
+        auto tryAddSolid = [&](auto ptr) {
+            if (ptr) solidCandidates.push_back(ptr);
+        };
+
+        int furnitureLod = options_.targetLOD;
+        if (furnitureLod == -1 || furnitureLod == 4) { tryAdd(furniture->getLod4MultiSurface()); tryAddSolid(furniture->getLod4Solid()); }
+        if (furnitureLod == -1 || furnitureLod == 3) { tryAdd(furniture->getLod3MultiSurface()); tryAddSolid(furniture->getLod3Solid()); }
+        if (furnitureLod == -1 || furnitureLod == 2) { tryAdd(furniture->getLod2MultiSurface()); tryAddSolid(furniture->getLod2Solid()); }
+        if (furnitureLod == -1 || furnitureLod == 1) { tryAdd(furniture->getLod1MultiSurface()); tryAddSolid(furniture->getLod1Solid()); }
+        if (furnitureLod == -1 || furnitureLod == 0) { tryAdd(furniture->getLod0MultiSurface()); }
+
+        // Triangulate MultiSurface candidates
+        for (auto& ms : candidates) {
+            Mesh tmp;
+            triangulateMultiSurface(*ms, tmp, Material{}, processedPolygonIds);
+            if (!tmp.isEmpty()) {
+                for (SubMesh& sm : tmp.subMeshes) {
+                    Mesh outMesh;
+                    outMesh.name = furnitureName.empty() ? "Furniture" : furnitureName;
+                    outMesh.addSubMesh(sm.material).vertices = sm.vertices;
+                    outMesh.subMeshes.back().triangles = sm.triangles;
+                    outMeshes.push_back(std::move(outMesh));
+                }
+            }
+        }
+
+        // Triangulate Solid candidates
+        for (auto& solid : solidCandidates) {
+            Mesh m;
+            triangulateSolid(*solid, m);
+            if (!m.isEmpty()) {
+                m.name = furnitureName.empty() ? "Furniture" : furnitureName;
+                outMeshes.push_back(std::move(m));
+            }
+        }
     }
 }
 
@@ -716,6 +778,9 @@ void MeshGenerator::triangulateOnlyRooms(const CityModel& cityModel,
 
             // Triangulate room's boundedBy surfaces
             triangulateBoundedBySurfaces(*room, outMeshes, nullptr);
+
+            // Triangulate interiorFurniture
+            triangulateRoomFurniture(*room, outMeshes, nullptr);
         }
     }
 }
@@ -785,6 +850,7 @@ void MeshGenerator::triangulateRoomByIndex(const CityModel& cityModel,
                     }
 
                     triangulateBoundedBySurfaces(*room, outMeshes, nullptr);
+                    triangulateRoomFurniture(*room, outMeshes, nullptr);
                     return;
                 }
                 roomCount++;

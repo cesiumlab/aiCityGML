@@ -10,25 +10,61 @@
 using namespace citygml;
 
 void printUsage(const char* prog) {
-    std::cerr << "Usage: " << prog << " <citygml_file.gml> [output_prefix]\n";
+    std::cerr << "Usage: " << prog << " <citygml_file.gml> [output_prefix] [options]\n";
     std::cerr << "  Parses a CityGML file, triangulates all LOD geometries,\n";
     std::cerr << "  and exports each LOD to a separate Wavefront OBJ file.\n";
     std::cerr << "  Default output: <input>_LOD<n>.obj\n";
+    std::cerr << "\nOptions:\n";
+    std::cerr << "  --lod <N>        Specify LOD level (0-4), or -1 for auto (highest). Default: 4\n";
+    std::cerr << "  --export-rooms    Export Room geometries (bldg:interiorRoom). Default: disabled\n";
+    std::cerr << "  --only-rooms     Export ONLY Room geometries, skip Building and other objects.\n";
+    std::cerr << "  --room-index <N> Export only the N-th Room (0-based index). Default: all rooms\n";
 }
 
 int main(int argc, char* argv[]) {
     std::string inputPath;
     std::string outputPrefix;
 
-    if (argc < 2) {
+    // MeshGenerator options
+    int targetLod = 4;
+    bool exportRooms = false;
+    bool onlyExportRooms = false;
+    int roomIndex = -1;
+
+    // Parse arguments
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--lod" && i + 1 < argc) {
+            targetLod = std::stoi(argv[++i]);
+        } else if (arg == "--export-rooms") {
+            exportRooms = true;
+        } else if (arg == "--only-rooms") {
+            exportRooms = true;
+            onlyExportRooms = true;
+        } else if (arg == "--room-index" && i + 1 < argc) {
+            exportRooms = true;
+            onlyExportRooms = true;
+            roomIndex = std::stoi(argv[++i]);
+        } else if (arg[0] != '-') {
+            // Positional argument: input file
+            if (inputPath.empty()) {
+                inputPath = arg;
+            } else {
+                outputPrefix = arg;
+            }
+        } else {
+            std::cerr << "[ERROR] Unknown option: " << arg << "\n";
+            printUsage(argv[0]);
+            return 1;
+        }
+    }
+
+    if (inputPath.empty()) {
         printUsage(argv[0]);
         return 1;
     }
-    inputPath = argv[1];
 
-    if (argc >= 3) {
-        outputPrefix = argv[2];
-    } else {
+    if (outputPrefix.empty()) {
         size_t dot = inputPath.rfind('.');
         if (dot != std::string::npos) {
             outputPrefix = inputPath.substr(0, dot);
@@ -37,7 +73,16 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << "Parsing: " << inputPath << "\n\n";
+    std::cout << "Parsing: " << inputPath << "\n";
+    std::cout << "Target LOD: " << targetLod << "\n";
+    std::cout << "Export rooms: " << (exportRooms ? "yes" : "no");
+    if (onlyExportRooms) {
+        std::cout << " (only rooms)";
+        if (roomIndex >= 0) {
+            std::cout << " [room-index=" << roomIndex << "]";
+        }
+    }
+    std::cout << "\n\n";
 
     CityGMLParser parser;
     std::shared_ptr<CityModel> cityModel;
@@ -57,11 +102,26 @@ int main(int argc, char* argv[]) {
     const auto& objects = cityModel->getCityObjects();
     std::cout << "Found " << objects.size() << " city objects.\n\n";
 
-    // Debug: find the specific RoofSurface that contains PolyID58908
+    // Debug: print room information
     for (size_t i = 0; i < objects.size(); ++i) {
         const auto& obj = objects[i];
         std::cout << "CityObject[" << i << "]: " << obj->getId()
                   << " (type: " << obj->getObjectType() << "), boundedBy=" << obj->getBoundedBySurfaces().size() << "\n";
+
+        // Print child city objects (Rooms)
+        const auto& children = obj->getChildCityObjects();
+        if (!children.empty()) {
+            std::cout << "  Child city objects (" << children.size() << "):\n";
+            for (const auto& child : children) {
+                std::cout << "    - " << child->getId()
+                          << " (type: " << child->getObjectType() << ")";
+                // Check for LOD geometries
+                if (child->getLod2MultiSurface() || child->getLod3MultiSurface() || child->getLod4MultiSurface()) {
+                    std::cout << " [has LOD geometry]";
+                }
+                std::cout << "\n";
+            }
+        }
 
         const auto& surfaces = obj->getBoundedBySurfaces();
         for (const auto& surf : surfaces) {
@@ -69,7 +129,6 @@ int main(int argc, char* argv[]) {
             if (!ms) continue;
             size_t geomCount = ms->getGeometriesCount();
             if (geomCount > 0) {
-                // Check the first polygon in this surface
                 auto poly = ms->getGeometry(0);
                 if (poly) {
                     std::cout << "  " << surf->getName() << " [" << geomCount << " geoms] poly[0]: "
@@ -83,20 +142,38 @@ int main(int argc, char* argv[]) {
     // Per-LOD mesh collection.
     std::map<int, std::vector<Mesh>> lodMeshes;
 
-    // Only export LOD4 for now.
-    int targetLods[] = { 4 };
+    // LOD levels to export (from command line, default just targetLod)
+    std::vector<int> targetLods;
+    if (targetLod == -1) {
+        // Auto mode: export all available LODs
+        targetLods = {0, 1, 2, 3, 4};
+    } else {
+        targetLods = {targetLod};
+    }
 
-    for (size_t lodIdx = 0; lodIdx < sizeof(targetLods) / sizeof(targetLods[0]); ++lodIdx) {
-        int lod = targetLods[lodIdx];
+    for (int lod : targetLods) {
         MeshGenerator gen;
         MeshGeneratorOptions opts;
         opts.targetLOD = lod;
+        opts.exportRooms = exportRooms;
+        opts.onlyExportRooms = onlyExportRooms;
+        opts.roomIndex = roomIndex;
         gen.setOptions(opts);
 
         for (size_t i = 0; i < objects.size(); ++i) {
             const auto& obj = objects[i];
             std::vector<Mesh> meshes;
-            gen.triangulateCityObject(*obj, meshes);
+
+            if (onlyExportRooms) {
+                if (roomIndex >= 0) {
+                    gen.triangulateRoomByIndex(*cityModel, meshes);
+                } else {
+                    gen.triangulateOnlyRooms(*cityModel, meshes);
+                }
+            } else {
+                gen.triangulateCityObject(*obj, meshes);
+            }
+
             if (!meshes.empty()) {
                 for (Mesh& m : meshes) {
                     if (!m.name.empty()) {
