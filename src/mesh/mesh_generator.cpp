@@ -7,6 +7,8 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <set>
 #include <tuple>
 #include <vector>
@@ -289,7 +291,8 @@ void MeshGenerator::triangulatePolygon(const Polygon& polygon,
 
 void MeshGenerator::triangulateMultiSurface(const MultiSurface& ms,
                                              Mesh& outMesh,
-                                             const Material& defaultMat) {
+                                             const Material& defaultMat,
+                                             const std::set<std::string>* processedPolygonIds) {
     outMesh.clear();
     outMesh.name = ms.getId().empty() ? "MultiSurface" : ms.getId();
 
@@ -299,6 +302,12 @@ void MeshGenerator::triangulateMultiSurface(const MultiSurface& ms,
     for (size_t i = 0; i < count; ++i) {
         PolygonPtr poly = ms.getGeometry(i);
         if (!poly) continue;
+
+        std::string polyId = poly->getId();
+        if (processedPolygonIds && !polyId.empty() &&
+            processedPolygonIds->find(polyId) != processedPolygonIds->end()) {
+            continue; // Already processed by Solid/MultiSurface, skip to avoid duplicate
+        }
 
         LinearRingPtr exterior = poly->getExteriorRing();
         if (!exterior || exterior->getPointsCount() < 3) continue;
@@ -359,8 +368,27 @@ void MeshGenerator::triangulateSolid(const Solid& solid,
 // ================================================================
 // CityGML object-level functions
 // ================================================================
+// Helper: collect all Polygon IDs from a geometry tree (for deduplication)
+static void collectPolygonIds(const citygml::AbstractGeometry* geom, std::set<std::string>& ids) {
+    if (!geom) return;
+
+    if (auto polygon = dynamic_cast<const citygml::Polygon*>(geom)) {
+        std::string pid = polygon->getId();
+        if (!pid.empty()) ids.insert(pid);
+    } else if (auto ms = dynamic_cast<const citygml::MultiSurface*>(geom)) {
+        for (size_t i = 0; i < ms->getGeometriesCount(); ++i) {
+            collectPolygonIds(ms->getGeometry(i).get(), ids);
+        }
+    } else if (auto solid = dynamic_cast<const citygml::Solid*>(geom)) {
+        if (auto shell = solid->getOuterShell()) {
+            collectPolygonIds(shell.get(), ids);
+        }
+    }
+}
+
 void MeshGenerator::triangulateBoundedBySurfaces(const CityObject& obj,
-                                                  std::vector<Mesh>& outMeshes) const {
+                                                  std::vector<Mesh>& outMeshes,
+                                                  const std::set<std::string>* processedPolygonIds) const {
     const auto& surfaces = obj.getBoundedBySurfaces();
 
     for (const auto& surface : surfaces) {
@@ -402,9 +430,9 @@ void MeshGenerator::triangulateBoundedBySurfaces(const CityObject& obj,
                 }
             }
         } else {
-            // 其他表面类型：直接三角化其 MultiSurface
+            // 其他表面类型：直接三角化其 MultiSurface，跳过已处理的 Polygon
             Mesh m;
-            triangulateMultiSurface(*ms, m);
+            triangulateMultiSurface(*ms, m, Material{}, processedPolygonIds);
             if (!m.isEmpty()) {
                 m.name = surface->getId().empty() ? surfaceType : surface->getId();
                 outMeshes.push_back(std::move(m));
@@ -434,6 +462,15 @@ void MeshGenerator::triangulateCityObject(const CityObject& obj,
         tryAdd(obj.getLod0MultiSurface());
         tryAdd(obj.getLod0FootPrint());
         tryAdd(obj.getLod0RoofEdge());
+    }
+
+    // Collect Polygon IDs from candidates and Solids to avoid duplicates in BoundedBy surfaces
+    std::set<std::string> processedPolygonIds;
+    for (auto& ms : candidates) {
+        collectPolygonIds(ms.get(), processedPolygonIds);
+    }
+    for (auto& solid : solidCandidates) {
+        collectPolygonIds(solid.get(), processedPolygonIds);
     }
 
     if (!candidates.empty()) {
@@ -498,9 +535,20 @@ void MeshGenerator::triangulateCityObject(const CityObject& obj,
         }
     }
 
-    // Triangulate boundedBy ThematicSurfaces (WallSurface, RoofSurface, etc.).
-    // TODO: 暂时禁用以隔离崩溃问题
-        triangulateBoundedBySurfaces(obj, outMeshes);
+    // Triangulate boundedBy ThematicSurfaces only for the HIGHEST available LOD.
+    // In CityGML, BoundedBy surfaces (WallSurface/RoofSurface/etc.) belong to the
+    // highest-LOD Solid that carries them. They should NOT be duplicated across LOD levels.
+    // LOD0 has no Solid, so BoundedBy surfaces do not apply there.
+    int maxLod = -1;
+    if (obj.getLod4Solid() || obj.getLod4MultiSurface()) maxLod = 4;
+    else if (obj.getLod3Solid() || obj.getLod3MultiSurface()) maxLod = 3;
+    else if (obj.getLod2Solid() || obj.getLod2MultiSurface()) maxLod = 2;
+    else if (obj.getLod1Solid() || obj.getLod1MultiSurface()) maxLod = 1;
+    else if (obj.getLod0MultiSurface() || obj.getLod0FootPrint() || obj.getLod0RoofEdge()) maxLod = 0;
+
+    if (options_.targetLOD == maxLod && maxLod > 0) {
+        triangulateBoundedBySurfaces(obj, outMeshes, &processedPolygonIds);
+    }
 }
 
 // ================================================================
@@ -916,11 +964,19 @@ void MeshGenerator::extrudeFootPrint(const std::vector<Vertex>& footprintVertice
 
 Material MeshGenerator::fromX3DMaterial(const X3DMaterial& mat) {
     Material m;
-    m.name = "X3DMaterial";
+    // 生成唯一的材质名称，基于 diffuseColor 的 RGB 值
     const auto& dc = mat.getDiffuseColor();
     if (dc.size() >= 3) {
         m.diffuseR = dc[0]; m.diffuseG = dc[1]; m.diffuseB = dc[2];
         if (dc.size() >= 4) m.diffuseA = dc[3];
+
+        // 根据 RGB 值生成唯一的材质名称，避免多个 X3DMaterial 使用相同名称
+        std::ostringstream oss;
+        oss << "mat_" << std::fixed << std::setprecision(3)
+            << dc[0] << "_" << dc[1] << "_" << dc[2];
+        m.name = oss.str();
+    } else {
+        m.name = "X3DMaterial";
     }
     const auto& ac = mat.getAmbientColor();
     if (ac.size() >= 3) {

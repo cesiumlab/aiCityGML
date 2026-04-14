@@ -6,6 +6,8 @@
 #include "gml_envelope_parser.h"
 #include "core/citygml_appearance.h"
 #include "core/citygml_geometry.h"
+#include "core/citygml_surface.h"
+#include "core/citygml_opening.h"
 
 #include <map>
 #include <set>
@@ -152,29 +154,44 @@ ParseResult CityGMLParser::parseCityModelNode(void* node, std::shared_ptr<CityMo
         // LOD 4
         if (cityObj->getLod4MultiSurface()) collectPolygons(cityObj->getLod4MultiSurface(), polygonMap);
         if (cityObj->getLod4Solid()) collectPolygons(cityObj->getLod4Solid(), polygonMap);
+        // boundedBy 主题表面（RoofSurface, WallSurface 等）
+        for (const auto& surface : cityObj->getBoundedBySurfaces()) {
+            if (surface->getMultiSurface()) {
+                collectPolygons(surface->getMultiSurface(), polygonMap);
+            }
+        }
+        // 开口（Window, Door 等）
+        for (const auto& opening : cityObj->getOpenings()) {
+            if (opening->getMultiSurface()) {
+                collectPolygons(opening->getMultiSurface(), polygonMap);
+            }
+        }
     }
 
     // Step 3: Set appearance data for each polygon based on gml:id matching
     for (const auto& appearance : cityModel->getAppearances()) {
         for (const auto& sd : appearance->getSurfaceData()) {
             if (auto mat = std::dynamic_pointer_cast<citygml::X3DMaterial>(sd)) {
+                // 遍历 material 的所有 targets，为每个 polygon 设置材质
                 for (const std::string& targetId : mat->getTargets()) {
                     std::string id = stripFragment(targetId);
                     auto it = polygonMap.find(id);
                     if (it != polygonMap.end()) {
-                        if (!it->second->getMaterial())
+                        // 材质只能设置一次，取第一个匹配的
+                        if (!it->second->getMaterial()) {
                             it->second->setAppearance(mat);
-                        break;
+                        }
                     }
                 }
             } else if (auto tex = std::dynamic_pointer_cast<citygml::ParameterizedTexture>(sd)) {
+                // 遍历 texture 的所有 targets，为每个 polygon 设置纹理
                 for (const auto& target : tex->getTargets()) {
                     std::string id = stripFragment(target.uri);
                     auto it = polygonMap.find(id);
                     if (it != polygonMap.end()) {
+                        // 纹理只能设置一次，取第一个匹配的
                         if (!it->second->getTexture())
                             it->second->setAppearance(tex);
-                        break;
                     }
                 }
             }
@@ -191,7 +208,9 @@ void CityGMLParser::collectPolygons(
 
     if (auto polygon = std::dynamic_pointer_cast<citygml::Polygon>(geom)) {
         std::string pid = polygon->getId();
-        if (!pid.empty()) polygonMap[pid] = polygon;
+        if (!pid.empty()) {
+            polygonMap[pid] = polygon;
+        }
     } else if (auto ms = std::dynamic_pointer_cast<citygml::MultiSurface>(geom)) {
         for (size_t i = 0; i < ms->getGeometriesCount(); ++i) {
             collectPolygons(ms->getGeometry(i), polygonMap);

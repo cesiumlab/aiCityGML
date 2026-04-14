@@ -31,4 +31,32 @@ void* ParserContext::getPolygonById(const std::string& id) const {
     return nullptr;
 }
 
+void ParserContext::registerParsedGeometry(const std::string& id, std::shared_ptr<Polygon> polygon) {
+    if (!id.empty() && polygon) {
+        parsedPolygons_[id] = polygon;
+    }
+}
+
+void ParserContext::registerParsedGeometry(const std::string& id, std::shared_ptr<MultiSurface> ms) {
+    if (!id.empty() && ms) {
+        parsedMultiSurfaces_[id] = ms;
+    }
+}
+
+std::shared_ptr<Polygon> ParserContext::getParsedPolygon(const std::string& id) const {
+    auto it = parsedPolygons_.find(id);
+    if (it != parsedPolygons_.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+std::shared_ptr<MultiSurface> ParserContext::getParsedMultiSurface(const std::string& id) const {
+    auto it = parsedMultiSurfaces_.find(id);
+    if (it != parsedMultiSurfaces_.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
 } // namespace citygml

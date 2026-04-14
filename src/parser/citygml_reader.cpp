@@ -1,4 +1,4 @@
-﻿#include "citygml_reader.h"
+#include "citygml_reader.h"
 #include "xml_document.h"
 #include "gml_envelope_parser.h"
 #include "gml_geometry_parser.h"
@@ -10,6 +10,7 @@
 #include "core/citygml_opening.h"
 #include "building/citygml_building.h"
 #include <sstream>
+#include <iostream>
 
 namespace citygml {
 

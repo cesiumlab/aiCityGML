@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "mesh/mesh.h"
 #include "core/citygml_geometry.h"
@@ -7,6 +7,8 @@
 #include "core/citygml_opening.h"
 #include <vector>
 #include <memory>
+#include <set>
+#include <string>
 
 namespace citygml {
 
@@ -63,9 +65,11 @@ public:
                                    Material& outMaterial);
 
     // Triangulate a MultiSurface (one or more Polygons).
+    // processedPolygonIds: if provided, Polygons with matching IDs are skipped (for deduplication).
     static void triangulateMultiSurface(const MultiSurface& ms,
                                         Mesh& outMesh,
-                                        const Material& defaultMat = Material{});
+                                        const Material& defaultMat = Material{},
+                                        const std::set<std::string>* processedPolygonIds = nullptr);
 
     // Triangulate a Solid (outer shell = MultiSurface).
     static void triangulateSolid(const Solid& solid,
@@ -83,8 +87,10 @@ public:
 
     // Triangulate ThematicSurface bounded by this CityObject (WallSurface, RoofSurface, etc.).
     // Each ThematicSurface may have its own MultiSurface at various LOD levels.
+    // processedPolygonIds: set of Polygon IDs already processed by Solid/MultiSurface to avoid duplicates.
     void triangulateBoundedBySurfaces(const CityObject& obj,
-                                      std::vector<Mesh>& outMeshes) const;
+                                      std::vector<Mesh>& outMeshes,
+                                      const std::set<std::string>* processedPolygonIds = nullptr) const;
 
     // =================================================================
     // FootPrint & RoofEdge helpers

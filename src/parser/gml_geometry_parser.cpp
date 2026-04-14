@@ -1,10 +1,51 @@
-﻿#include "gml_geometry_parser.h"
+#include "gml_geometry_parser.h"
 #include "xml_document.h"
 #include "parser_context.h"
 #include "core/citygml_geometry.h"
 #include <sstream>
+#include <algorithm>
 
 namespace citygml {
+
+// 反转 Polygon 的绕行方向（用于处理 OrientableSurface orientation="-"）
+// 反转所有环的点顺序：exteriorRing + 所有 interiorRings
+static std::shared_ptr<Polygon> flipPolygonWinding(std::shared_ptr<Polygon> polygon) {
+    if (!polygon) return nullptr;
+
+    auto flipped = std::make_shared<Polygon>();
+    flipped->setId(polygon->getId());
+
+    if (auto ext = polygon->getExteriorRing()) {
+        auto flippedRing = std::make_shared<LinearRing>();
+        flippedRing->setId(ext->getId());
+        const auto& pts = ext->getPoints();
+        for (auto it = pts.rbegin(); it != pts.rend(); ++it) {
+            flippedRing->addPoint(*it);
+        }
+        flipped->setExteriorRing(flippedRing);
+    }
+
+    for (size_t i = 0; i < polygon->getInteriorRingsCount(); ++i) {
+        if (auto ring = polygon->getInteriorRing(i)) {
+            auto flippedRing = std::make_shared<LinearRing>();
+            flippedRing->setId(ring->getId());
+            const auto& pts = ring->getPoints();
+            for (auto it = pts.rbegin(); it != pts.rend(); ++it) {
+                flippedRing->addPoint(*it);
+            }
+            flipped->addInteriorRing(flippedRing);
+        }
+    }
+
+    if (auto mat = polygon->getMaterial()) {
+        flipped->setAppearance(mat);
+    }
+    if (auto tex = polygon->getTexture()) {
+        flipped->setAppearance(tex);
+    }
+
+    return flipped;
+}
 
 GMLGeometryParser::GMLGeometryParser(std::shared_ptr<ParserContext> context)
     : context_(context) {}
@@ -18,9 +59,22 @@ void GMLGeometryParser::registerPolygonNode(void* node, const std::string& gmlId
     }
 }
 
-// 根据 gml:id 查找并解析几何节点（支持 Polygon 和 MultiSurface）
+// 根据 gml:id 查找并返回几何对象
+// 优先返回缓存中已解析的对象，避免同一 Polygon 被重复解析
 std::shared_ptr<AbstractGeometry> GMLGeometryParser::resolveGeometryById(const std::string& id) {
     if (id.empty()) return nullptr;
+
+    // 1. 先检查缓存中是否已有解析后的 Polygon
+    if (auto cachedPolygon = context_->getParsedPolygon(id)) {
+        return cachedPolygon;
+    }
+
+    // 2. 检查缓存中是否已有解析后的 MultiSurface
+    if (auto cachedMS = context_->getParsedMultiSurface(id)) {
+        return cachedMS;
+    }
+
+    // 3. 缓存都没有，通过 XML 节点解析
     void* node = context_->getPolygonById(id);
     if (!node) return nullptr;
     return parseGeometry(node);
@@ -149,11 +203,10 @@ std::shared_ptr<MultiCurve> GMLGeometryParser::parseMultiCurve(void* node) {
     return multiCurve;
 }
 
-// 解析 xlink:href 引用，展开 Polygon 到 MultiSurface
+// 解析 xlink:href 引用，展开几何到 MultiSurface
 void GMLGeometryParser::resolveXLinkReference(void* elemNode, std::shared_ptr<MultiSurface> multiSurface) {
     if (!elemNode || !multiSurface) return;
 
-    // 使用 XMLDocument::attribute 直接查询，避免直接使用 tinyxml2 类型
     std::string href = XMLDocument::attribute(elemNode, "xlink_href");
     if (href.empty()) {
         href = XMLDocument::attribute(elemNode, "xlink:href");
@@ -164,17 +217,48 @@ void GMLGeometryParser::resolveXLinkReference(void* elemNode, std::shared_ptr<Mu
 
     if (href.empty()) return;
 
-    // 去掉 # 前缀，查找对应的 Polygon 节点
     if (!href.empty() && href[0] == '#') href.erase(0, 1);
-    void* polygonNode = context_->getPolygonById(href);
-    if (polygonNode) {
-        auto polygon = parsePolygon(polygonNode);
-        if (polygon) multiSurface->addGeometry(polygon);
+    std::shared_ptr<AbstractGeometry> geom = resolveGeometryById(href);
+    if (!geom) {
+        return;
+    }
+
+    // Polygon: 直接添加
+    if (auto polygon = std::dynamic_pointer_cast<Polygon>(geom)) {
+        multiSurface->addGeometry(polygon);
+        return;
+    }
+    // MultiSurface / CompositeSurface / TriangulatedSurface: 展开所有 Polygon
+    if (auto ms = std::dynamic_pointer_cast<MultiSurface>(geom)) {
+        for (size_t i = 0; i < ms->getGeometriesCount(); ++i) {
+            if (auto poly = ms->getGeometry(i)) {
+                multiSurface->addGeometry(poly);
+            }
+        }
+        return;
+    }
+    // Solid: 展开其 outer shell 中的所有 Polygon
+    if (auto solid = std::dynamic_pointer_cast<Solid>(geom)) {
+        if (auto shell = solid->getOuterShell()) {
+            for (size_t i = 0; i < shell->getGeometriesCount(); ++i) {
+                if (auto poly = shell->getGeometry(i)) {
+                    multiSurface->addGeometry(poly);
+                }
+            }
+        }
     }
 }
 
 std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
     if (!node) return nullptr;
+
+    // 检查是否有 gml:id，如果有则尝试从缓存获取
+    std::string nodeId = XMLDocument::attribute(node, "gml:id");
+    if (!nodeId.empty()) {
+        if (auto cached = context_->getParsedMultiSurface(nodeId)) {
+            return cached;
+        }
+    }
 
     auto multiSurface = std::make_shared<MultiSurface>();
     std::string nodeName = XMLDocument::nodeName(node);
@@ -194,7 +278,9 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
 
             if (type == "Polygon" || type == "gml:Polygon") {
                 auto polygon = parsePolygon(surfaceNode);
-                if (polygon) multiSurface->addGeometry(polygon);
+                if (polygon) {
+                    multiSurface->addGeometry(polygon);
+                }
             }
             else if (type == "MultiSurface" || type == "gml:MultiSurface" ||
                      type == "CompositeSurface" || type == "gml:CompositeSurface") {
@@ -203,7 +289,9 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
                 if (childSurface) {
                     for (size_t i = 0; i < childSurface->getGeometriesCount(); ++i) {
                         auto poly = childSurface->getGeometry(i);
-                        if (poly) multiSurface->addGeometry(poly);
+                        if (poly) {
+                            multiSurface->addGeometry(poly);
+                        }
                     }
                 }
             }
@@ -238,6 +326,66 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
                         if (polygon) multiSurface->addGeometry(polygon);
                     }
                 }
+            }
+            else if (type == "OrientableSurface" || type == "gml:OrientableSurface") {
+                // gml:OrientableSurface 包装一个 baseSurface，通过 xlink:href 引用 Polygon
+                // orientation="-" 表示反转法线方向
+                std::string orientation = XMLDocument::attribute(surfaceNode, "orientation");
+                bool flipWinding = (orientation == "-");
+
+                // 查找 baseSurface 节点
+                void* baseSurface = XMLDocument::child(surfaceNode, "baseSurface");
+                if (!baseSurface) baseSurface = XMLDocument::child(surfaceNode, "gml:baseSurface");
+
+                if (baseSurface) {
+                    // 尝试解析 baseSurface（可能内嵌 Polygon，也可能是 xlink:href 引用）
+                    void* geomNode = XMLDocument::firstChildElement(baseSurface);
+                    std::shared_ptr<AbstractGeometry> baseGeom;
+
+                    if (geomNode) {
+                        std::string geomType = XMLDocument::nodeName(geomNode);
+                        if (geomType == "Polygon" || geomType == "gml:Polygon") {
+                            baseGeom = parsePolygon(geomNode);
+                        } else {
+                            // baseSurface 内嵌了其他几何类型（如另一个 MultiSurface）
+                            baseGeom = parseGeometry(geomNode);
+                        }
+                    } else {
+                        // baseSurface 是空元素，只有 xlink:href
+                        std::string href = XMLDocument::attribute(baseSurface, "xlink_href");
+                        if (href.empty()) href = XMLDocument::attribute(baseSurface, "xlink:href");
+                        if (href.empty()) href = XMLDocument::attribute(baseSurface, "href");
+                        if (!href.empty()) {
+                            if (href[0] == '#') href.erase(0, 1);
+                            baseGeom = resolveGeometryById(href);
+                        }
+                    }
+
+                    // 展开 baseGeom 中的所有 Polygon
+                    if (auto poly = std::dynamic_pointer_cast<Polygon>(baseGeom)) {
+                        if (flipWinding) poly = flipPolygonWinding(poly);
+                        if (poly) multiSurface->addGeometry(poly);
+                    } else if (auto ms = std::dynamic_pointer_cast<MultiSurface>(baseGeom)) {
+                        for (size_t i = 0; i < ms->getGeometriesCount(); ++i) {
+                            auto p = ms->getGeometry(i);
+                            if (p) {
+                                if (flipWinding) p = flipPolygonWinding(std::dynamic_pointer_cast<Polygon>(p));
+                                if (p) multiSurface->addGeometry(p);
+                            }
+                        }
+                    } else if (auto solid = std::dynamic_pointer_cast<Solid>(baseGeom)) {
+                        // Solid: 展开其 outer shell
+                        if (auto shell = solid->getOuterShell()) {
+                            for (size_t i = 0; i < shell->getGeometriesCount(); ++i) {
+                                auto p = shell->getGeometry(i);
+                                if (p) {
+                                    if (flipWinding) p = flipPolygonWinding(std::dynamic_pointer_cast<Polygon>(p));
+                                    if (p) multiSurface->addGeometry(p);
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 // 有子元素但不是已知的表面类型：尝试解析 xlink:href 引用
                 resolveXLinkReference(surfaceNode, multiSurface);
@@ -269,6 +417,11 @@ std::shared_ptr<MultiSurface> GMLGeometryParser::parseMultiSurface(void* node) {
                 }
             }
         }
+    }
+
+    // 注册到缓存
+    if (!nodeId.empty()) {
+        context_->registerParsedGeometry(nodeId, multiSurface);
     }
 
     return multiSurface;
@@ -385,12 +538,19 @@ std::shared_ptr<Solid> GMLGeometryParser::parseSolid(void* node) {
 
 std::shared_ptr<Polygon> GMLGeometryParser::parsePolygon(void* node) {
     if (!node) return nullptr;
-    
-    auto polygon = std::make_shared<Polygon>();
-    
+
     std::string id = XMLDocument::attribute(node, "gml:id");
+
+    // 如果已经缓存过，直接返回缓存的对象（避免同一 Polygon 被重复解析）
+    if (!id.empty()) {
+        if (auto cached = context_->getParsedPolygon(id)) {
+            return cached;
+        }
+    }
+
+    auto polygon = std::make_shared<Polygon>();
     polygon->setId(id);
-    
+
     void* exterior = XMLDocument::child(node, "exterior");
     if (!exterior) exterior = XMLDocument::child(node, "gml:exterior");
     if (exterior) {
@@ -403,7 +563,7 @@ std::shared_ptr<Polygon> GMLGeometryParser::parsePolygon(void* node) {
             }
         }
     }
-    
+
     auto interiors = XMLDocument::children(node, "interior");
     if (interiors.empty()) interiors = XMLDocument::children(node, "gml:interior");
     for (void* interior : interiors) {
@@ -416,7 +576,12 @@ std::shared_ptr<Polygon> GMLGeometryParser::parsePolygon(void* node) {
             }
         }
     }
-    
+
+    // 注册到缓存，避免后续 xlink 引用时重复解析
+    if (!id.empty()) {
+        context_->registerParsedGeometry(id, polygon);
+    }
+
     return polygon;
 }
 

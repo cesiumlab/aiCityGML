@@ -1,6 +1,8 @@
 #include <iostream>
 #include <iomanip>
 #include <fstream>
+#include <string>
+#include <utility>
 #include "parser/citygml_parser.h"
 #include "mesh/mesh_generator.h"
 #include "writers/obj_writer.h"
@@ -8,15 +10,15 @@
 using namespace citygml;
 
 void printUsage(const char* prog) {
-    std::cerr << "Usage: " << prog << " <citygml_file.gml> [output.obj]\n";
+    std::cerr << "Usage: " << prog << " <citygml_file.gml> [output_prefix]\n";
     std::cerr << "  Parses a CityGML file, triangulates all LOD geometries,\n";
-    std::cerr << "  and exports to a Wavefront OBJ file.\n";
-    std::cerr << "  Default output: <input>.obj\n";
+    std::cerr << "  and exports each LOD to a separate Wavefront OBJ file.\n";
+    std::cerr << "  Default output: <input>_LOD<n>.obj\n";
 }
 
 int main(int argc, char* argv[]) {
     std::string inputPath;
-    std::string outputPath;
+    std::string outputPrefix;
 
     if (argc < 2) {
         printUsage(argv[0]);
@@ -25,26 +27,17 @@ int main(int argc, char* argv[]) {
     inputPath = argv[1];
 
     if (argc >= 3) {
-        outputPath = argv[2];
+        outputPrefix = argv[2];
     } else {
         size_t dot = inputPath.rfind('.');
         if (dot != std::string::npos) {
-            outputPath = inputPath.substr(0, dot) + ".obj";
+            outputPrefix = inputPath.substr(0, dot);
         } else {
-            outputPath = inputPath + ".obj";
+            outputPrefix = inputPath;
         }
     }
-    std::string mtlPath = outputPath;
-    size_t dot = mtlPath.rfind('.');
-    if (dot != std::string::npos) {
-        mtlPath = mtlPath.substr(0, dot) + ".mtl";
-    } else {
-        mtlPath = mtlPath + ".mtl";
-    }
 
-    std::cout << "Parsing: " << inputPath << "\n";
-    std::cout << "Output OBJ: " << outputPath << "\n";
-    std::cout << "Output MTL: " << mtlPath << "\n\n";
+    std::cout << "Parsing: " << inputPath << "\n\n";
 
     CityGMLParser parser;
     std::shared_ptr<CityModel> cityModel;
@@ -61,62 +54,98 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[OK] Parse completed successfully.\n";
 
-    std::vector<Mesh> allMeshes;
-    MeshGenerator gen;
-
     const auto& objects = cityModel->getCityObjects();
     std::cout << "Found " << objects.size() << " city objects.\n\n";
 
+    // Debug: find the specific RoofSurface that contains PolyID58908
     for (size_t i = 0; i < objects.size(); ++i) {
         const auto& obj = objects[i];
-        std::cout << "Processing object " << (i + 1) << "/" << objects.size()
-                  << ": " << obj->getObjectType();
-        if (!obj->getId().empty()) std::cout << " (id=" << obj->getId() << ")";
-        std::cout << "\n";
+        std::cout << "CityObject[" << i << "]: " << obj->getId()
+                  << " (type: " << obj->getObjectType() << "), boundedBy=" << obj->getBoundedBySurfaces().size() << "\n";
 
-        std::vector<Mesh> meshes;
-        gen.triangulateCityObject(*obj, meshes);
-
-        if (meshes.empty()) {
-            std::cout << "  -> No mesh generated (no LOD geometry found).\n";
-        } else {
-            size_t totalVerts = 0, totalTris = 0;
-            for (const Mesh& m : meshes) {
-                totalVerts += m.totalVertices();
-                totalTris += m.totalTriangles();
+        const auto& surfaces = obj->getBoundedBySurfaces();
+        for (const auto& surf : surfaces) {
+            auto ms = surf->getMultiSurface();
+            if (!ms) continue;
+            size_t geomCount = ms->getGeometriesCount();
+            if (geomCount > 0) {
+                // Check the first polygon in this surface
+                auto poly = ms->getGeometry(0);
+                if (poly) {
+                    std::cout << "  " << surf->getName() << " [" << geomCount << " geoms] poly[0]: "
+                              << poly->getId() << "\n";
+                }
             }
-            std::cout << "  -> " << meshes.size() << " mesh(es), "
-                      << totalVerts << " vertices, " << totalTris << " triangles.\n";
-            for (const Mesh& m : meshes) {
-                allMeshes.push_back(std::move(m));
+        }
+    }
+    (void)cityModel;
+
+    // Per-LOD mesh collection.
+    std::map<int, std::vector<Mesh>> lodMeshes;
+
+    // Only export LOD4 for now.
+    int targetLods[] = { 4 };
+
+    for (size_t lodIdx = 0; lodIdx < sizeof(targetLods) / sizeof(targetLods[0]); ++lodIdx) {
+        int lod = targetLods[lodIdx];
+        MeshGenerator gen;
+        MeshGeneratorOptions opts;
+        opts.targetLOD = lod;
+        gen.setOptions(opts);
+
+        for (size_t i = 0; i < objects.size(); ++i) {
+            const auto& obj = objects[i];
+            std::vector<Mesh> meshes;
+            gen.triangulateCityObject(*obj, meshes);
+            if (!meshes.empty()) {
+                for (Mesh& m : meshes) {
+                    if (!m.name.empty()) {
+                        m.name = "LOD" + std::to_string(lod) + "_" + m.name;
+                    } else {
+                        m.name = "LOD" + std::to_string(lod);
+                    }
+                }
+                for (Mesh& m : meshes) {
+                    lodMeshes[lod].push_back(std::move(m));
+                }
             }
         }
     }
 
-    if (allMeshes.empty()) {
+    if (lodMeshes.empty()) {
         std::cerr << "\n[ERROR] No meshes generated from any city objects.\n";
         return 1;
     }
 
+    int exportedCount = 0;
+    for (const auto& [lod, meshes] : lodMeshes) {
+        if (meshes.empty()) continue;
+
+        std::string objPath = outputPrefix + "_LOD" + std::to_string(lod) + ".obj";
+        std::string mtlPath = outputPrefix + "_LOD" + std::to_string(lod) + ".mtl";
+
+        size_t totalVerts = 0, totalTris = 0;
+        for (const Mesh& m : meshes) {
+            totalVerts += m.totalVertices();
+            totalTris += m.totalTriangles();
+        }
+
+        Vec3 offset = computeBoundingBoxCenter(meshes);
+
+        bool ok = writeObjFile(meshes, objPath, mtlPath, offset);
+        if (!ok) {
+            std::cerr << "[ERROR] Failed to write: " << objPath << "\n";
+            continue;
+        }
+
+        std::cout << "[OK] LOD" << lod << ": " << meshes.size() << " mesh(es), "
+                  << totalVerts << " vertices, " << totalTris << " triangles"
+                  << "  -> " << objPath << "\n";
+        exportedCount++;
+    }
+
     std::cout << "\n============================================================\n";
-    std::cout << "Exporting " << allMeshes.size() << " mesh(es) to OBJ...\n";
-
-    bool ok = writeObjFile(allMeshes, outputPath, mtlPath);
-    if (!ok) {
-        std::cerr << "[ERROR] Failed to write OBJ file.\n";
-        return 1;
-    }
-
-    size_t totalVerts = 0, totalTris = 0;
-    for (const Mesh& m : allMeshes) {
-        totalVerts += m.totalVertices();
-        totalTris += m.totalTriangles();
-    }
-    std::cout << "[OK] OBJ exported successfully.\n";
-    std::cout << "  File: " << outputPath << "\n";
-    std::cout << "  MTL:  " << mtlPath << "\n";
-    std::cout << "  Total: " << allMeshes.size() << " mesh(es), "
-              << totalVerts << " vertices, " << totalTris << " triangles.\n";
+    std::cout << "Exported " << exportedCount << " LOD OBJ file(s).\n";
     std::cout << "============================================================\n";
 
     return 0;

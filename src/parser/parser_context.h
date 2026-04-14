@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <string>
 #include <vector>
@@ -7,6 +7,9 @@
 #include <memory>
 
 namespace citygml {
+
+class Polygon;
+class MultiSurface;
 
 class ParserContext {
 public:
@@ -29,6 +32,12 @@ public:
     void registerPolygon(const std::string& id, void* node);
     void* getPolygonById(const std::string& id) const;
 
+    // 解析后的几何对象缓存，避免重复解析
+    void registerParsedGeometry(const std::string& id, std::shared_ptr<Polygon> polygon);
+    void registerParsedGeometry(const std::string& id, std::shared_ptr<MultiSurface> ms);
+    std::shared_ptr<Polygon> getParsedPolygon(const std::string& id) const;
+    std::shared_ptr<MultiSurface> getParsedMultiSurface(const std::string& id) const;
+
 private:
     std::string srsName_;
     std::map<std::string, std::string> namespaces_;
@@ -36,6 +45,9 @@ private:
     std::vector<std::string> warnings_;
     // 按 gml:id 索引的 Polygon 节点指针映射表
     std::map<std::string, void*> polygonRegistry_;
+    // 解析后的几何对象缓存
+    std::map<std::string, std::shared_ptr<Polygon>> parsedPolygons_;
+    std::map<std::string, std::shared_ptr<MultiSurface>> parsedMultiSurfaces_;
 };
 
 } // namespace citygml
