@@ -1358,7 +1358,8 @@ void triangulateRings(const LinearRing& exterior,
     Vec3 origin, x_axis, y_axis, z_axis;
     std::vector<Vec3> clean3d;
     std::vector<Vec2> clean2d;
-    buildLocalFrame(pts3d, nullptr, origin, x_axis, y_axis, z_axis, clean3d, clean2d, std::vector<Vec2>());
+	auto v2 = std::vector<Vec2>();
+    buildLocalFrame(pts3d, nullptr, origin, x_axis, y_axis, z_axis, clean3d, clean2d, v2);
     if (clean3d.size() < 3) return;
 
     // For earcut: use projected 2D (in exterior's frame).
@@ -1372,7 +1373,8 @@ void triangulateRings(const LinearRing& exterior,
         std::vector<Vec3> h3d = ringToVec3(*hole);
         std::vector<Vec3> hc3d;
         std::vector<Vec2> hc2d;
-        buildLocalFrame(h3d, nullptr, origin, x_axis, y_axis, z_axis, hc3d, hc2d, std::vector<Vec2>());
+		auto v2 = std::vector<Vec2>();
+        buildLocalFrame(h3d, nullptr, origin, x_axis, y_axis, z_axis, hc3d, hc2d,v2 );
         if (hc2d.size() >= 3) {
             holesData.push_back({std::move(hc3d), std::move(hc2d)});
         }
