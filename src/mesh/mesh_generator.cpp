@@ -75,12 +75,8 @@ static Vec3 vecCross(const Vec3& a, const Vec3& b) {
 //   z_axis  = outward 3D normal (from full polygon shoelace)
 //   y_axis  = z_axis x x_axis   (right-handed: CCW in UV = outward in 3D)
 // Project all unique ring points onto this frame.
-// Outputs parallel 3D (original positions) and 2D (local UV) arrays.
-// uvPts: optional per-vertex texture coordinates (must be parallel to pts with start offset).
-//        If provided, collinear-point removal keeps them synchronized.
-//        If nullopt, only 3D positions are projected (no UV).
+// Output: out3d = 3D positions, out2d = 2D projection (for earcut only).
 static void buildLocalFrame(const std::vector<Vec3>& pts,
-                           const std::vector<Vec2>* uvPts,
                            Vec3& origin, Vec3& x_axis, Vec3& y_axis, Vec3& z_axis,
                            std::vector<Vec3>& out3d,
                            std::vector<Vec2>& out2d) {
@@ -157,11 +153,7 @@ static void buildLocalFrame(const std::vector<Vec3>& pts,
         const Vec2& next = raw2d[(i + 1) % m];
         if (std::abs(triangleArea2D(prev.u, prev.v, curr.u, curr.v, next.u, next.v)) > 1e-10) {
             out3d.push_back(pts[start + i]);
-            if (uvPts && i < uvPts->size()) {
-                out2d.push_back((*uvPts)[i]);
-            } else {
-                out2d.push_back(curr);
-            }
+            out2d.push_back(curr);
         }
     }
 }
@@ -191,9 +183,12 @@ static void triangulateRing(const std::vector<Vec3>& pts,
     triangulateRing(pts, nullptr, outVerts, outTris);
 }
 
-// Full UV-aware triangulateRing.
+// Full triangulateRing with optional real texture coordinates.
+// realUVs: if provided, must be parallel to pts (same count as pts).
+//          Collinear-point removal is synchronized so clean3d[i] uses realUVs[origIndex[i]].
+//          If null, Vertex.uv is omitted.
 static void triangulateRing(const std::vector<Vec3>& pts,
-                           const std::vector<Vec2>* uvPts,
+                           const std::vector<Vec2>* realUVs,
                            std::vector<Vertex>& outVerts,
                            std::vector<Triangle>& outTris) {
     if (pts.size() < 3) return;
@@ -201,7 +196,7 @@ static void triangulateRing(const std::vector<Vec3>& pts,
     Vec3 origin, x_axis, y_axis, z_axis;
     std::vector<Vec3> clean3d;
     std::vector<Vec2> clean2d;
-    buildLocalFrame(pts, uvPts, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
+    buildLocalFrame(pts, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
 
     if (clean3d.size() < 3) return;
 
@@ -218,11 +213,35 @@ static void triangulateRing(const std::vector<Vec3>& pts,
     }
     bool flipRing = (polygonArea > 0.0);
 
+    // Build cleanUVs: parallel to clean3d, using original UV indices.
+    // The buildLocalFrame removal tracks original indices starting from 1.
+    std::vector<Vec2> cleanUVs;
+    if (realUVs && !realUVs->empty()) {
+        size_t n = pts.size();
+        for (size_t i = 1; i < n; ++i) {
+            // Same collinearity check as buildLocalFrame:
+            size_t prev = (i == 1) ? 0 : (i - 1);
+            size_t next = ((i + 1) == n) ? 0 : (i + 1);
+            Vec2 pPrev = { pts[prev].x, pts[prev].z };
+            Vec2 pCurr = { pts[i].x, pts[i].z };
+            Vec2 pNext = { pts[next].x, pts[next].z };
+            if (std::abs(triangleArea2D(pPrev.u, pPrev.v, pCurr.u, pCurr.v, pNext.u, pNext.v)) > 1e-10) {
+                if (i < realUVs->size()) {
+                    cleanUVs.push_back((*realUVs)[i]);
+                }
+            }
+        }
+        // buildLocalFrame also includes pts[0] at the start
+        if (0 < realUVs->size()) {
+            cleanUVs.insert(cleanUVs.begin(), (*realUVs)[0]);
+        }
+    }
+
     uint32_t baseIdx = static_cast<uint32_t>(outVerts.size());
     for (size_t i = 0; i < clean3d.size(); ++i) {
         Vec3 n{-z_axis.x, -z_axis.y, -z_axis.z};
-        if (uvPts && i < clean2d.size()) {
-            outVerts.emplace_back(clean3d[i], n, clean2d[i]);
+        if (!cleanUVs.empty() && i < cleanUVs.size()) {
+            outVerts.emplace_back(clean3d[i], n, cleanUVs[i]);
         } else {
             outVerts.emplace_back(clean3d[i], n);
         }
@@ -247,6 +266,15 @@ MeshGenerator::MeshGenerator(const MeshGeneratorOptions& options)
 
 void MeshGenerator::setOptions(const MeshGeneratorOptions& options) {
     options_ = options;
+}
+
+void MeshGenerator::generate(const CityModel& cityModel,
+                              std::vector<Mesh>& outMeshes) {
+    const auto& objects = cityModel.getCityObjects();
+    for (const auto& obj : objects) {
+        if (!obj) continue;
+        triangulateCityObject(*obj, outMeshes);
+    }
 }
 
 // ================================================================
@@ -549,6 +577,220 @@ void MeshGenerator::triangulateCityObject(const CityObject& obj,
     if (options_.targetLOD == maxLod && maxLod > 0) {
         triangulateBoundedBySurfaces(obj, outMeshes, &processedPolygonIds);
     }
+
+    // Triangulate Room geometries (bldg:interiorRoom) if enabled
+    if (options_.exportRooms && lod == maxLod) {
+        triangulateRooms(obj, outMeshes, &processedPolygonIds);
+    }
+}
+
+// ================================================================
+// Room triangulation (bldg:interiorRoom)
+// ================================================================
+void MeshGenerator::triangulateRooms(const CityObject& obj,
+                                      std::vector<Mesh>& outMeshes,
+                                      const std::set<std::string>* processedPolygonIds) const {
+    const auto& children = obj.getChildCityObjects();
+
+    for (const auto& child : children) {
+        if (!child) continue;
+
+        // 只处理 BuildingRoom 类型的子对象
+        if (child->getObjectType() != "BuildingRoom") continue;
+
+        const CityObject* room = child.get();
+
+        // 遍历所有 LOD 级别（LOD 2, 3, 4 - Room 通常没有 LOD 0/1）
+        std::vector<std::shared_ptr<MultiSurface>> candidates;
+        std::vector<std::shared_ptr<Solid>> solidCandidates;
+
+        auto tryAdd = [&](auto ptr) {
+            if (ptr) candidates.push_back(ptr);
+        };
+        auto tryAddSolid = [&](auto ptr) {
+            if (ptr) solidCandidates.push_back(ptr);
+        };
+
+        int roomLod = options_.targetLOD;
+        // Room 通常在 LOD 2, 3, 4 有几何数据
+        if (roomLod == -1 || roomLod == 4) { tryAdd(room->getLod4MultiSurface()); tryAddSolid(room->getLod4Solid()); }
+        if (roomLod == -1 || roomLod == 3) { tryAdd(room->getLod3MultiSurface()); tryAddSolid(room->getLod3Solid()); }
+        if (roomLod == -1 || roomLod == 2) { tryAdd(room->getLod2MultiSurface()); tryAddSolid(room->getLod2Solid()); }
+        if (roomLod == -1 || roomLod == 1) { tryAdd(room->getLod1MultiSurface()); tryAddSolid(room->getLod1Solid()); }
+        if (roomLod == -1 || roomLod == 0) { tryAdd(room->getLod0MultiSurface()); }
+
+        // Triangulate MultiSurface candidates
+        for (auto& ms : candidates) {
+            Mesh tmp;
+            triangulateMultiSurface(*ms, tmp, Material{}, processedPolygonIds);
+            if (!tmp.isEmpty()) {
+                for (SubMesh& sm : tmp.subMeshes) {
+                    Mesh outMesh;
+                    outMesh.name = room->getId().empty()
+                                       ? ("Room_" + std::to_string(outMeshes.size()))
+                                       : room->getId();
+                    outMesh.addSubMesh(sm.material).vertices = sm.vertices;
+                    outMesh.subMeshes.back().triangles = sm.triangles;
+                    outMeshes.push_back(std::move(outMesh));
+                }
+            }
+        }
+
+        // Triangulate Solid candidates
+        for (auto& solid : solidCandidates) {
+            Mesh m;
+            triangulateSolid(*solid, m);
+            if (!m.isEmpty()) {
+                m.name = room->getId().empty()
+                             ? ("Room_" + std::to_string(outMeshes.size()))
+                             : room->getId();
+                outMeshes.push_back(std::move(m));
+            }
+        }
+
+        // Triangulate boundedBy surfaces for the room (interior surfaces like FloorSurface, CeilingSurface, etc.)
+        triangulateBoundedBySurfaces(*room, outMeshes, processedPolygonIds);
+    }
+}
+
+void MeshGenerator::triangulateOnlyRooms(const CityModel& cityModel,
+                                          std::vector<Mesh>& outMeshes) const {
+    const auto& objects = cityModel.getCityObjects();
+
+    for (const auto& obj : objects) {
+        if (!obj) continue;
+
+        const auto& children = obj->getChildCityObjects();
+        for (const auto& child : children) {
+            if (!child) continue;
+            if (child->getObjectType() != "BuildingRoom") continue;
+
+            const CityObject* room = child.get();
+
+            // Collect LOD geometries
+            std::vector<std::shared_ptr<MultiSurface>> candidates;
+            std::vector<std::shared_ptr<Solid>> solidCandidates;
+
+            auto tryAdd = [&](auto ptr) {
+                if (ptr) candidates.push_back(ptr);
+            };
+            auto tryAddSolid = [&](auto ptr) {
+                if (ptr) solidCandidates.push_back(ptr);
+            };
+
+            int roomLod = options_.targetLOD;
+            if (roomLod == -1 || roomLod == 4) { tryAdd(room->getLod4MultiSurface()); tryAddSolid(room->getLod4Solid()); }
+            if (roomLod == -1 || roomLod == 3) { tryAdd(room->getLod3MultiSurface()); tryAddSolid(room->getLod3Solid()); }
+            if (roomLod == -1 || roomLod == 2) { tryAdd(room->getLod2MultiSurface()); tryAddSolid(room->getLod2Solid()); }
+            if (roomLod == -1 || roomLod == 1) { tryAdd(room->getLod1MultiSurface()); tryAddSolid(room->getLod1Solid()); }
+            if (roomLod == -1 || roomLod == 0) { tryAdd(room->getLod0MultiSurface()); }
+
+            // Triangulate MultiSurface
+            for (auto& ms : candidates) {
+                Mesh tmp;
+                triangulateMultiSurface(*ms, tmp, Material{}, nullptr);
+                if (!tmp.isEmpty()) {
+                    for (SubMesh& sm : tmp.subMeshes) {
+                        Mesh outMesh;
+                        outMesh.name = room->getId().empty()
+                                           ? ("Room_" + std::to_string(outMeshes.size()))
+                                           : room->getId();
+                        outMesh.addSubMesh(sm.material).vertices = sm.vertices;
+                        outMesh.subMeshes.back().triangles = sm.triangles;
+                        outMeshes.push_back(std::move(outMesh));
+                    }
+                }
+            }
+
+            // Triangulate Solid
+            for (auto& solid : solidCandidates) {
+                Mesh m;
+                triangulateSolid(*solid, m);
+                if (!m.isEmpty()) {
+                    m.name = room->getId().empty()
+                                 ? ("Room_" + std::to_string(outMeshes.size()))
+                                 : room->getId();
+                    outMeshes.push_back(std::move(m));
+                }
+            }
+
+            // Triangulate room's boundedBy surfaces
+            triangulateBoundedBySurfaces(*room, outMeshes, nullptr);
+        }
+    }
+}
+
+void MeshGenerator::triangulateRoomByIndex(const CityModel& cityModel,
+                                            std::vector<Mesh>& outMeshes) const {
+    if (options_.roomIndex < 0) {
+        triangulateOnlyRooms(cityModel, outMeshes);
+        return;
+    }
+
+    const auto& objects = cityModel.getCityObjects();
+
+    for (const auto& obj : objects) {
+        if (!obj) continue;
+
+        const auto& children = obj->getChildCityObjects();
+
+        int roomCount = 0;
+        for (const auto& child : children) {
+            if (child && child->getObjectType() == "BuildingRoom") {
+                if (roomCount == options_.roomIndex) {
+                    const CityObject* room = child.get();
+
+                    std::vector<std::shared_ptr<MultiSurface>> candidates;
+                    std::vector<std::shared_ptr<Solid>> solidCandidates;
+
+                    auto tryAdd = [&](auto ptr) {
+                        if (ptr) candidates.push_back(ptr);
+                    };
+                    auto tryAddSolid = [&](auto ptr) {
+                        if (ptr) solidCandidates.push_back(ptr);
+                    };
+
+                    int roomLod = options_.targetLOD;
+                    if (roomLod == -1 || roomLod == 4) { tryAdd(room->getLod4MultiSurface()); tryAddSolid(room->getLod4Solid()); }
+                    if (roomLod == -1 || roomLod == 3) { tryAdd(room->getLod3MultiSurface()); tryAddSolid(room->getLod3Solid()); }
+                    if (roomLod == -1 || roomLod == 2) { tryAdd(room->getLod2MultiSurface()); tryAddSolid(room->getLod2Solid()); }
+                    if (roomLod == -1 || roomLod == 1) { tryAdd(room->getLod1MultiSurface()); tryAddSolid(room->getLod1Solid()); }
+                    if (roomLod == -1 || roomLod == 0) { tryAdd(room->getLod0MultiSurface()); }
+
+                    for (auto& ms : candidates) {
+                        Mesh tmp;
+                        triangulateMultiSurface(*ms, tmp, Material{}, nullptr);
+                        if (!tmp.isEmpty()) {
+                            for (SubMesh& sm : tmp.subMeshes) {
+                                Mesh outMesh;
+                                outMesh.name = room->getId().empty()
+                                                   ? ("Room_" + std::to_string(options_.roomIndex))
+                                                   : room->getId();
+                                outMesh.addSubMesh(sm.material).vertices = sm.vertices;
+                                outMesh.subMeshes.back().triangles = sm.triangles;
+                                outMeshes.push_back(std::move(outMesh));
+                            }
+                        }
+                    }
+
+                    for (auto& solid : solidCandidates) {
+                        Mesh m;
+                        triangulateSolid(*solid, m);
+                        if (!m.isEmpty()) {
+                            m.name = room->getId().empty()
+                                         ? ("Room_" + std::to_string(options_.roomIndex))
+                                         : room->getId();
+                            outMeshes.push_back(std::move(m));
+                        }
+                    }
+
+                    triangulateBoundedBySurfaces(*room, outMeshes, nullptr);
+                    return;
+                }
+                roomCount++;
+            }
+        }
+    }
 }
 
 // ================================================================
@@ -675,16 +917,14 @@ void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
     if (!exterior || exterior->getPointsCount() < 3) return;
 
     std::vector<Vec3> pts3d = ringToVec3(*exterior);
-    const std::vector<Vec2>* exteriorUvPtr = nullptr;
     std::vector<Vec2> exteriorUv;
 
     if (auto tex = surface.getTexture()) {
         std::vector<TextureCoordinates2D> tc = collectTextureCoords(surface, *tex);
         if (!tc.empty() && !tc[0].coordinates.empty()) {
             exteriorUv = tc[0].coordinates;
-            if (exteriorUv.size() >= pts3d.size()) {
+            if (exteriorUv.size() > pts3d.size()) {
                 exteriorUv.resize(pts3d.size());
-                exteriorUvPtr = &exteriorUv;
             }
         }
         outMaterial = fromParameterizedTexture(*tex);
@@ -696,15 +936,35 @@ void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
     Vec3 origin, x_axis, y_axis, z_axis;
     std::vector<Vec3> clean3d;
     std::vector<Vec2> clean2d;
-    buildLocalFrame(pts3d, exteriorUvPtr, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
+    buildLocalFrame(pts3d, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
     if (clean3d.size() < 3) return;
 
+    // Build cleanUVs for exterior ring (parallel to clean3d).
+    std::vector<Vec2> cleanUVs;
+    if (!exteriorUv.empty()) {
+        // Re-apply same collinear removal to match clean3d.
+        size_t n = pts3d.size();
+        for (size_t i = 1; i < n; ++i) {
+            size_t prev = (i == 1) ? 0 : (i - 1);
+            size_t next = ((i + 1) == n) ? 0 : (i + 1);
+            Vec2 pPrev = { pts3d[prev].x, pts3d[prev].z };
+            Vec2 pCurr = { pts3d[i].x, pts3d[i].z };
+            Vec2 pNext = { pts3d[next].x, pts3d[next].z };
+            if (std::abs(triangleArea2D(pPrev.u, pPrev.v, pCurr.u, pCurr.v, pNext.u, pNext.v)) > 1e-10) {
+                if (i < exteriorUv.size()) {
+                    cleanUVs.push_back(exteriorUv[i]);
+                }
+            }
+        }
+        if (!exteriorUv.empty()) {
+            cleanUVs.insert(cleanUVs.begin(), exteriorUv[0]);
+        }
+    }
+
     // Project each hole ring to 2D using the exterior's local frame.
-    // For earcut: use projected 2D (in exterior's frame).
-    // For 3D output: use the hole's ORIGINAL 3D coordinates.
     struct HoleData {
-        std::vector<Vec3> pts3d;    // original 3D (cleaned)
-        std::vector<Vec2> pts2d;    // projected 2D in exterior's frame
+        std::vector<Vec3> pts3d;
+        std::vector<Vec2> pts2d;
     };
     std::vector<HoleData> holesData;
     for (const auto& hole : holes) {
@@ -712,7 +972,7 @@ void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
         std::vector<Vec3> h3d = ringToVec3(*hole);
         std::vector<Vec3> h3dClean;
         std::vector<Vec2> h2d;
-        buildLocalFrame(h3d, nullptr, origin, x_axis, y_axis, z_axis, h3dClean, h2d);
+        buildLocalFrame(h3d, origin, x_axis, y_axis, z_axis, h3dClean, h2d);
         if (h2d.size() >= 3) {
             holesData.push_back({std::move(h3dClean), std::move(h2d)});
         }
@@ -720,8 +980,8 @@ void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
 
     // Build ring data for earcut and 3D output.
     struct RingData {
-        std::vector<Vec2> pts2d;     // 2D for earcut
-        std::vector<Vec3> pts3d;    // 3D for vertex output
+        std::vector<Vec2> pts2d;
+        std::vector<Vec3> pts3d;
     };
     std::vector<RingData> allRings;
     allRings.push_back({clean2d, clean3d});
@@ -753,10 +1013,15 @@ void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
     std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(earcutData);
     if (indices.empty()) return;
 
-    // Emit 3D vertices: each ring's original 3D coords + exterior's UV.
+    // Emit 3D vertices: exterior has UV if available, holes have no UV.
+    bool hasExteriorUV = (!cleanUVs.empty() && cleanUVs.size() == allRings[0].pts3d.size());
     for (size_t ri = 0; ri < allRings.size(); ++ri) {
         for (size_t i = 0; i < allRings[ri].pts3d.size(); ++i) {
-            outVertices.emplace_back(allRings[ri].pts3d[i], z_axis, allRings[ri].pts2d[i]);
+            if (ri == 0 && hasExteriorUV) {
+                outVertices.emplace_back(allRings[ri].pts3d[i], z_axis, cleanUVs[i]);
+            } else {
+                outVertices.emplace_back(allRings[ri].pts3d[i], z_axis);
+            }
         }
     }
 
@@ -1059,7 +1324,7 @@ void triangulateRings(const LinearRing& exterior,
     Vec3 origin, x_axis, y_axis, z_axis;
     std::vector<Vec3> clean3d;
     std::vector<Vec2> clean2d;
-    buildLocalFrame(pts3d, nullptr, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
+    buildLocalFrame(pts3d, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
     if (clean3d.size() < 3) return;
 
     // For earcut: use projected 2D (in exterior's frame).
@@ -1073,7 +1338,7 @@ void triangulateRings(const LinearRing& exterior,
         std::vector<Vec3> h3d = ringToVec3(*hole);
         std::vector<Vec3> hc3d;
         std::vector<Vec2> hc2d;
-        buildLocalFrame(h3d, nullptr, origin, x_axis, y_axis, z_axis, hc3d, hc2d);
+        buildLocalFrame(h3d, origin, x_axis, y_axis, z_axis, hc3d, hc2d);
         if (hc2d.size() >= 3) {
             holesData.push_back({std::move(hc3d), std::move(hc2d)});
         }
