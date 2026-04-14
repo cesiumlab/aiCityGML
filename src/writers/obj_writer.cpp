@@ -83,7 +83,7 @@ static bool doWriteObj(std::ostream& objOut,
         std::vector<size_t> vtIndex(allVerts.size(), 0);
         for (size_t i = 0; i < allVerts.size(); ++i) {
             if (allVerts[i].uv.has_value()) {
-                vtIndex[i] = ++uvVertCount;
+                vtIndex[i] = ++uvVertCount;  // UV index within current mesh, 1-based
             }
         }
         bool hasAnyUV = (uvVertCount > 0);
@@ -115,6 +115,7 @@ static bool doWriteObj(std::ostream& objOut,
         objOut << "# " << allVerts.size() << " normals\n";
 
         size_t vertBase = 0;
+        size_t globalVertIdx = 0;
         for (const citygml::SubMesh& sm : mesh.subMeshes) {
             std::string mtlName;
             bool found = false;
@@ -140,12 +141,18 @@ static bool doWriteObj(std::ostream& objOut,
                 uint64_t i1 = vertexOffset + vertBase + tri.v1;
                 uint64_t i2 = vertexOffset + vertBase + tri.v2;
                 if (hasAnyUV) {
-                    uint64_t t0 = vertexOffset + vtIndex[vertBase + tri.v0];
-                    uint64_t t1 = vertexOffset + vtIndex[vertBase + tri.v1];
-                    uint64_t t2 = vertexOffset + vtIndex[vertBase + tri.v2];
-                    objOut << "f " << i0 << "/" << t0 << "/" << i0 << " "
-                           << i1 << "/" << t1 << "/" << i1 << " "
-                           << i2 << "/" << t2 << "/" << i2 << "\n";
+                    uint64_t t0 = vtIndex[globalVertIdx + tri.v0];
+                    uint64_t t1 = vtIndex[globalVertIdx + tri.v1];
+                    uint64_t t2 = vtIndex[globalVertIdx + tri.v2];
+                    if (t0 == 0 || t1 == 0 || t2 == 0) {
+                        objOut << "f " << i0 << "//" << i0 << " "
+                               << i1 << "//" << i1 << " "
+                               << i2 << "//" << i2 << "\n";
+                    } else {
+                        objOut << "f " << i0 << "/" << t0 << "/" << i0 << " "
+                               << i1 << "/" << t1 << "/" << i1 << " "
+                               << i2 << "/" << t2 << "/" << i2 << "\n";
+                    }
                 } else {
                     objOut << "f " << i0 << "//" << i0 << " "
                            << i1 << "//" << i1 << " "
@@ -153,6 +160,7 @@ static bool doWriteObj(std::ostream& objOut,
                 }
             }
             vertBase += sm.vertices.size();
+            globalVertIdx += sm.vertices.size();
         }
 
         vertexOffset += allVerts.size();

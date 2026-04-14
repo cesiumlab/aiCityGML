@@ -75,15 +75,21 @@ static Vec3 vecCross(const Vec3& a, const Vec3& b) {
 //   z_axis  = outward 3D normal (from full polygon shoelace)
 //   y_axis  = z_axis x x_axis   (right-handed: CCW in UV = outward in 3D)
 // Project all unique ring points onto this frame.
-// Output: out3d = 3D positions, out2d = 2D projection (for earcut only).
-static void buildLocalFrame(const std::vector<Vec3>& pts,
+// out3d/out2d: filtered 3D and 2D (collinear points removed).
+// uvOut: filtered UVs (parallel to out3d/out2d). If uvIn is null, uvOut is empty.
+// uvIn: input UVs (parallel to pts). May be null.
+// Returns: the start index used (0, or 1 if closing duplicate was skipped).
+static size_t buildLocalFrame(const std::vector<Vec3>& pts,
+                           const std::vector<Vec2>* uvIn,
                            Vec3& origin, Vec3& x_axis, Vec3& y_axis, Vec3& z_axis,
                            std::vector<Vec3>& out3d,
-                           std::vector<Vec2>& out2d) {
+                           std::vector<Vec2>& out2d,
+                           std::vector<Vec2>& uvOut) {
     out3d.clear();
     out2d.clear();
+    uvOut.clear();
     size_t n = pts.size();
-    if (n < 3) return;
+    if (n < 3) return 0;
 
     // Compute outward 3D normal from all polygon vertices (shoelace in 3D).
     Vec3 area(0, 0, 0);
@@ -95,14 +101,14 @@ static void buildLocalFrame(const std::vector<Vec3>& pts,
         area.z += v0.x * v1.y - v0.y * v1.x;
     }
     double rawZlen = std::sqrt(area.x * area.x + area.y * area.y + area.z * area.z);
-    if (rawZlen < 1e-10) return;  // degenerate polygon
+    if (rawZlen < 1e-10) return 0;  // degenerate polygon
     z_axis = { area.x / rawZlen, area.y / rawZlen, area.z / rawZlen };
 
     // x_axis = normalize(pts[1] - pts[0])  [first edge]
     origin = pts[0];
     x_axis = pts[1] - origin;
     double xlen = std::sqrt(x_axis.x * x_axis.x + x_axis.y * x_axis.y + x_axis.z * x_axis.z);
-    if (xlen < 1e-10) return;
+    if (xlen < 1e-10) return 0;
     x_axis = { x_axis.x / xlen, x_axis.y / xlen, x_axis.z / xlen };
 
     // y_axis = z_axis x x_axis  (right-handed: CCW in UV = outward in 3D)
@@ -132,7 +138,7 @@ static void buildLocalFrame(const std::vector<Vec3>& pts,
         start = 1;
     }
     size_t uniq = n - start;
-    if (uniq < 3) return;
+    if (uniq < 3) return start;
 
     // Project all unique points and compute 2D local UVs.
     // Also build raw2d for collinearity check (must use abs(area)).
@@ -154,8 +160,12 @@ static void buildLocalFrame(const std::vector<Vec3>& pts,
         if (std::abs(triangleArea2D(prev.u, prev.v, curr.u, curr.v, next.u, next.v)) > 1e-10) {
             out3d.push_back(pts[start + i]);
             out2d.push_back(curr);
+            if (uvIn && start + i < uvIn->size()) {
+                uvOut.push_back((*uvIn)[start + i]);
+            }
         }
     }
+    return start;
 }
 
 // Compute signed area of polygon (positive = CCW, negative = CW).
@@ -185,7 +195,7 @@ static void triangulateRing(const std::vector<Vec3>& pts,
 
 // Full triangulateRing with optional real texture coordinates.
 // realUVs: if provided, must be parallel to pts (same count as pts).
-//          Collinear-point removal is synchronized so clean3d[i] uses realUVs[origIndex[i]].
+//          UVs are kept in sync with vertices for earcut triangulation.
 //          If null, Vertex.uv is omitted.
 static void triangulateRing(const std::vector<Vec3>& pts,
                            const std::vector<Vec2>* realUVs,
@@ -194,56 +204,33 @@ static void triangulateRing(const std::vector<Vec3>& pts,
     if (pts.size() < 3) return;
 
     Vec3 origin, x_axis, y_axis, z_axis;
-    std::vector<Vec3> clean3d;
-    std::vector<Vec2> clean2d;
-    buildLocalFrame(pts, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
+    std::vector<Vec3> proj3d;
+    std::vector<Vec2> proj2d;
+    std::vector<Vec2> cleanUVs;
+    buildLocalFrame(pts, realUVs, origin, x_axis, y_axis, z_axis, proj3d, proj2d, cleanUVs);
 
-    if (clean3d.size() < 3) return;
+    if (proj3d.size() < 3) return;
 
-    std::vector<uint32_t> indices = mapboxEarcutTriangulate(clean2d);
+    std::vector<uint32_t> indices = mapboxEarcutTriangulate(proj2d);
     if (indices.empty()) return;
 
     // earcut produces triangles with CCW winding in 2D. If our outer ring is CW,
     // flip all indices to maintain consistent CCW winding in 3D.
     double polygonArea = 0.0;
-    for (size_t i = 0; i < clean2d.size(); ++i) {
-        const Vec2& p0 = clean2d[i];
-        const Vec2& p1 = clean2d[(i + 1) % clean2d.size()];
+    for (size_t i = 0; i < proj2d.size(); ++i) {
+        const Vec2& p0 = proj2d[i];
+        const Vec2& p1 = proj2d[(i + 1) % proj2d.size()];
         polygonArea += p0.u * p1.v - p1.u * p0.v;
     }
     bool flipRing = (polygonArea > 0.0);
 
-    // Build cleanUVs: parallel to clean3d, using original UV indices.
-    // The buildLocalFrame removal tracks original indices starting from 1.
-    std::vector<Vec2> cleanUVs;
-    if (realUVs && !realUVs->empty()) {
-        size_t n = pts.size();
-        for (size_t i = 1; i < n; ++i) {
-            // Same collinearity check as buildLocalFrame:
-            size_t prev = (i == 1) ? 0 : (i - 1);
-            size_t next = ((i + 1) == n) ? 0 : (i + 1);
-            Vec2 pPrev = { pts[prev].x, pts[prev].z };
-            Vec2 pCurr = { pts[i].x, pts[i].z };
-            Vec2 pNext = { pts[next].x, pts[next].z };
-            if (std::abs(triangleArea2D(pPrev.u, pPrev.v, pCurr.u, pCurr.v, pNext.u, pNext.v)) > 1e-10) {
-                if (i < realUVs->size()) {
-                    cleanUVs.push_back((*realUVs)[i]);
-                }
-            }
-        }
-        // buildLocalFrame also includes pts[0] at the start
-        if (0 < realUVs->size()) {
-            cleanUVs.insert(cleanUVs.begin(), (*realUVs)[0]);
-        }
-    }
-
     uint32_t baseIdx = static_cast<uint32_t>(outVerts.size());
-    for (size_t i = 0; i < clean3d.size(); ++i) {
+    for (size_t i = 0; i < proj3d.size(); ++i) {
         Vec3 n{-z_axis.x, -z_axis.y, -z_axis.z};
         if (!cleanUVs.empty() && i < cleanUVs.size()) {
-            outVerts.emplace_back(clean3d[i], n, cleanUVs[i]);
+            outVerts.emplace_back(proj3d[i], n, cleanUVs[i]);
         } else {
-            outVerts.emplace_back(clean3d[i], n);
+            outVerts.emplace_back(proj3d[i], n);
         }
     }
     for (size_t i = 0; i < indices.size(); i += 3) {
@@ -998,34 +985,14 @@ void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
         outMaterial = fromX3DMaterial(*mat);
     }
 
-    // Project exterior ring to 2D using local frame.
+    // Project exterior ring to 2D using local frame (UVs filtered in sync).
     Vec3 origin, x_axis, y_axis, z_axis;
     std::vector<Vec3> clean3d;
     std::vector<Vec2> clean2d;
-    buildLocalFrame(pts3d, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
-    if (clean3d.size() < 3) return;
-
-    // Build cleanUVs for exterior ring (parallel to clean3d).
     std::vector<Vec2> cleanUVs;
-    if (!exteriorUv.empty()) {
-        // Re-apply same collinear removal to match clean3d.
-        size_t n = pts3d.size();
-        for (size_t i = 1; i < n; ++i) {
-            size_t prev = (i == 1) ? 0 : (i - 1);
-            size_t next = ((i + 1) == n) ? 0 : (i + 1);
-            Vec2 pPrev = { pts3d[prev].x, pts3d[prev].z };
-            Vec2 pCurr = { pts3d[i].x, pts3d[i].z };
-            Vec2 pNext = { pts3d[next].x, pts3d[next].z };
-            if (std::abs(triangleArea2D(pPrev.u, pPrev.v, pCurr.u, pCurr.v, pNext.u, pNext.v)) > 1e-10) {
-                if (i < exteriorUv.size()) {
-                    cleanUVs.push_back(exteriorUv[i]);
-                }
-            }
-        }
-        if (!exteriorUv.empty()) {
-            cleanUVs.insert(cleanUVs.begin(), exteriorUv[0]);
-        }
-    }
+    buildLocalFrame(pts3d, exteriorUv.empty() ? nullptr : &exteriorUv,
+                    origin, x_axis, y_axis, z_axis, clean3d, clean2d, cleanUVs);
+    if (clean3d.size() < 3) return;
 
     // Project each hole ring to 2D using the exterior's local frame.
     struct HoleData {
@@ -1038,7 +1005,8 @@ void MeshGenerator::triangulatePolygonWithHoles(const Polygon& surface,
         std::vector<Vec3> h3d = ringToVec3(*hole);
         std::vector<Vec3> h3dClean;
         std::vector<Vec2> h2d;
-        buildLocalFrame(h3d, origin, x_axis, y_axis, z_axis, h3dClean, h2d);
+        std::vector<Vec2> hUV;  // holes have no UV, kept empty
+        buildLocalFrame(h3d, nullptr, origin, x_axis, y_axis, z_axis, h3dClean, h2d, hUV);
         if (h2d.size() >= 3) {
             holesData.push_back({std::move(h3dClean), std::move(h2d)});
         }
@@ -1390,7 +1358,7 @@ void triangulateRings(const LinearRing& exterior,
     Vec3 origin, x_axis, y_axis, z_axis;
     std::vector<Vec3> clean3d;
     std::vector<Vec2> clean2d;
-    buildLocalFrame(pts3d, origin, x_axis, y_axis, z_axis, clean3d, clean2d);
+    buildLocalFrame(pts3d, nullptr, origin, x_axis, y_axis, z_axis, clean3d, clean2d, std::vector<Vec2>());
     if (clean3d.size() < 3) return;
 
     // For earcut: use projected 2D (in exterior's frame).
@@ -1404,7 +1372,7 @@ void triangulateRings(const LinearRing& exterior,
         std::vector<Vec3> h3d = ringToVec3(*hole);
         std::vector<Vec3> hc3d;
         std::vector<Vec2> hc2d;
-        buildLocalFrame(h3d, origin, x_axis, y_axis, z_axis, hc3d, hc2d);
+        buildLocalFrame(h3d, nullptr, origin, x_axis, y_axis, z_axis, hc3d, hc2d, std::vector<Vec2>());
         if (hc2d.size() >= 3) {
             holesData.push_back({std::move(hc3d), std::move(hc2d)});
         }
