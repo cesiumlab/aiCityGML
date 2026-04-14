@@ -172,6 +172,11 @@ target_include_directories(aicitygml PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
+# Export the library for install
+install(TARGETS aicitygml
+        EXPORT aicitygml-targets
+        ARCHIVE DESTINATION lib)
+
 # ============================================================
 # 测试程序
 # ============================================================
@@ -182,6 +187,8 @@ add_executable(test_srsname src/test/test_srsname.cpp)
 target_link_libraries(test_srsname PRIVATE aicitygml)
 
 add_executable(test_triangulate src/test/test_triangulate.cpp)
+
+# test_export_obj removed - file does not exist
 
 # ============================================================
 # 安装规则
@@ -203,20 +210,25 @@ install(FILES ${TINYXML2_INCLUDE_DIR}/tinyxml2.h
 install(FILES ${EARCUT_ROOT}/mapbox/earcut.hpp
         DESTINATION include/mapbox)
 
-# --- 4. tinyxml2 Debug/Release lib ---
+# --- 4. tinyxml2 Debug lib ---
 install(FILES ${TINYXML2_ROOT}/lib/debug/tinyxml2d.lib
-        DESTINATION lib
-        RENAME tinyxml2d.lib)
+        DESTINATION lib/debug
+        CONFIGURATIONS Debug)
+
+# --- 5. tinyxml2 Release lib ---
 install(FILES ${TINYXML2_ROOT}/lib/release/tinyxml2.lib
-        DESTINATION lib)
+        DESTINATION lib/release
+        CONFIGURATIONS Release)
 
-# --- 5. 静态库 (.lib) ---
-install(TARGETS aicitygml
-        EXPORT aicitygml-targets
-        ARCHIVE DESTINATION lib
-        LIBRARY DESTINATION lib)
+# --- 6. 静态库 (Debug/Release) ---
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/Debug/aicitygmld.lib
+        DESTINATION lib/debug
+        CONFIGURATIONS Debug)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/Release/aicitygml.lib
+        DESTINATION lib/release
+        CONFIGURATIONS Release)
 
-# --- 6. 导出 CMake 配置（供外部项目 find_package 使用）---
+# --- 7. 导出 CMake 配置（供外部项目 find_package 使用）---
 install(EXPORT aicitygml-targets
         FILE aicitygml-targets.cmake
         NAMESPACE aicitygml::
@@ -229,4 +241,5 @@ configure_package_config_file(
     INSTALL_DESTINATION lib/cmake/aicitygml
     PATH_VARS TINYXML2_ROOT TINYXML2_INCLUDE_DIR)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/aicitygml-config.cmake
-        DESTINATION lib/cmake/aicitygml)
+        DESTINATION lib/cmake/aicitygml
+        CONFIGURATIONS Release)
