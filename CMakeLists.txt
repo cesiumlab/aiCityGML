@@ -21,7 +21,7 @@ add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 add_compile_definitions($<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS)
 
 # VS2019 /std:c++17
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++17")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++17")
 
 # Debug: 关闭默认的 /RTC1，使用 /Od /MDd（动态链接）
 set(CMAKE_CXX_FLAGS_DEBUG "/W4 /Od /Ob0 /Zi /D_DEBUG /EHsc /MDd")
@@ -33,7 +33,15 @@ set(CMAKE_CXX_FLAGS_RELEASE "/W4 /O2 /Ob2 /GL /D NDEBUG /EHsc /MD")
 # 依赖库
 # ============================================================
 # --- tinyxml2: 手动安装版 E:/opensource/install/tinyxml2 ---
+if (WIN32)
 set(TINYXML2_ROOT "E:/opensource/install/tinyxml2")
+set(EARCUT_ROOT "E:/opensource/earcut/earcut.hpp/include")
+else()
+set(TINYXML2_ROOT "$ENV{VCPKG_ROOT}")
+set(EARCUT_ROOT "$ENV{VCPKG_ROOT}/include")
+
+
+endif(WIN32)
 find_path(TINYXML2_INCLUDE_DIR tinyxml2.h PATHS "${TINYXML2_ROOT}/include")
 find_library(TINYXML2_LIBRARY tinyxml2 PATHS "${TINYXML2_ROOT}/lib" NO_DEFAULT_PATH)
 if(NOT TINYXML2_LIBRARY)
@@ -46,7 +54,6 @@ else()
 endif()
 
 # --- earcut: 本地 E:/opensource/earcut/earcut.hpp/include/ ---
-set(EARCUT_ROOT "E:/opensource/earcut/earcut.hpp/include")
 
 # ============================================================
 # 头文件目录
@@ -188,6 +195,19 @@ target_link_libraries(test_srsname PRIVATE aicitygml)
 
 add_executable(test_triangulate src/test/test_triangulate.cpp)
 
+if (WIN32)
+
+else()
+target_compile_options(aicitygml PRIVATE -fPIC)
+target_link_libraries(test_parser PUBLIC  ${TINYXML2_LIBRARY}
+)
+target_link_libraries(test_srsname PUBLIC
+${TINYXML2_LIBRARY}
+)
+target_link_libraries(test_triangulate PUBLIC
+${TINYXML2_LIBRARY}
+)
+endif()
 # test_export_obj removed - file does not exist
 
 # ============================================================
@@ -197,6 +217,7 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/install" CACHE PATH "Installation prefix" FORCE)
 endif()
 
+if (WIN32)
 # --- 1. citygml 公共头文件 ---
 install(DIRECTORY src/
         DESTINATION include
@@ -243,3 +264,13 @@ configure_package_config_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/aicitygml-config.cmake
         DESTINATION lib/cmake/aicitygml
         CONFIGURATIONS Release)
+else()
+install(DIRECTORY src/
+        DESTINATION include
+        FILES_MATCHING PATTERN "*.h")
+        
+  # --- 6. 静态库 (Debug/Release) ---
+install(TARGETS aicitygml ARCHIVE
+        DESTINATION lib
+        CONFIGURATIONS Release)      
+endif()
